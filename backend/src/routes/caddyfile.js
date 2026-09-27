@@ -1,52 +1,60 @@
 import { Router } from 'express';
-import { createReadStream } from 'fs';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
-import { CADDY_ADMIN_URL, caddyLoad, withTimeout } from '../caddy.js';
-import { dockerExec } from '../docker.js';
+import { caddyLoad, withTimeout } from '../caddy.js';
+import { readContainerFile, removeContainerPath, writeContainerFile } from '../containerFs.js';
+import { execInInstance } from '../docker.js';
+import { DEFAULT_INSTANCE_ID } from '../instances.js';
 import logger from '../logger.js';
 
 const router = Router();
-const CADDY_CONFIG_PATH = process.env.CADDY_CONFIG_PATH || '/etc/caddy/Caddyfile';
 const HISTORY_PATH = process.env.HISTORY_PATH || '/etc/caddy-ui/history';
 const MAX_HISTORY = 20;
 
-async function ensureHistoryDir() {
+function instanceHistoryDir(instanceId) {
+    return instanceId && instanceId !== DEFAULT_INSTANCE_ID
+        ? join(HISTORY_PATH, instanceId)
+        : HISTORY_PATH;
+}
+
+async function ensureHistoryDir(instanceId) {
     try {
-        await mkdir(HISTORY_PATH, { recursive: true });
+        await mkdir(instanceHistoryDir(instanceId), { recursive: true });
     } catch { }
 }
 
-async function snapshotCaddyfile() {
+async function snapshotCaddyfile(configPath, containerName, instanceId) {
     try {
-        await ensureHistoryDir();
-        const content = await readFile(CADDY_CONFIG_PATH, 'utf8');
+        await ensureHistoryDir(instanceId);
+        const dir = instanceHistoryDir(instanceId);
+        const content = await readContainerFile(containerName, configPath);
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         const filename = `Caddyfile-${timestamp}`;
-        await writeFile(join(HISTORY_PATH, filename), content, 'utf8');
-        await pruneHistory();
-        logger.info(`Caddyfile snapshot created`, { filename });
+        await writeFile(join(dir, filename), content, 'utf8');
+        await pruneHistory(instanceId);
+        logger.info(`Caddyfile snapshot created`, { filename, instanceId });
     } catch (err) {
         logger.warn(`Failed to snapshot Caddyfile`, { error: err.message });
     }
 }
 
-async function pruneHistory() {
+async function pruneHistory(instanceId) {
     try {
-        const files = await readdir(HISTORY_PATH);
+        const dir = instanceHistoryDir(instanceId);
+        const files = await readdir(dir);
         const sorted = files
             .filter(f => f.startsWith('Caddyfile-'))
             .sort()
             .reverse();
         for (const file of sorted.slice(MAX_HISTORY)) {
-            await unlink(join(HISTORY_PATH, file)).catch(() => { });
+            await unlink(join(dir, file)).catch(() => { });
         }
     } catch { }
 }
 
-async function fmtCaddyfile(content) {
+async function fmtCaddyfile(content, containerName) {
     try {
-        const { stdout } = await dockerExec(['caddy', 'fmt', '-'], content);
+        const { stdout } = await execInInstance(containerName, 'caddy', ['fmt', '-'], content);
         return stdout || content;
     } catch (err) {
         logger.warn('caddy fmt failed', { error: err.message });
@@ -65,9 +73,9 @@ function isDockerUnavailable(err) {
     return /cannot connect to the docker daemon|is the docker daemon running|no such container|permission denied while trying to connect|docker:? (?:command )?not found|executable file not found|not found in \$path/.test(msg);
 }
 
-async function adaptViaAdminApi(content) {
+async function adaptViaAdminApi(content, adminUrl) {
     const res = await withTimeout(
-        fetch(`${CADDY_ADMIN_URL}/adapt?adapter=caddyfile`, {
+        fetch(`${adminUrl}/adapt?adapter=caddyfile`, {
             method: 'POST',
             headers: { 'Content-Type': 'text/caddyfile', 'Origin': 'http://0.0.0.0:2019' },
             body: content,
@@ -86,22 +94,28 @@ async function adaptViaAdminApi(content) {
 
 // Adapt through the caddy binary in the Caddy container, writing the buffer to a
 // temp file next to the real Caddyfile so relative `import` paths resolve.
-async function adaptViaCaddyBinary(content) {
-    const tmp = join(dirname(CADDY_CONFIG_PATH), `.caddy-ui-adapt-${process.pid}-${Date.now()}.tmp`);
-    const script = `cat > '${tmp}' && caddy adapt --config '${tmp}' --adapter caddyfile > /dev/null; rc=$?; rm -f '${tmp}'; exit $rc`;
-    await dockerExec(['sh', '-c', script], content);
+//
+// Runs as separate array-argument exec calls (no shell) rather than a single
+// interpolated `sh -c` script, since configPath -- and therefore tmp -- isn't
+// validated against shell metacharacters and previously would have let a
+// crafted instance config break out of the script's quoting.
+async function adaptViaCaddyBinary(content, configPath, containerName) {
+    const tmp = join(dirname(configPath), `.caddy-ui-adapt-${process.pid}-${Date.now()}.tmp`);
+    await writeContainerFile(containerName, tmp, content);
+    try {
+        await execInInstance(containerName, 'caddy', ['adapt', '--config', tmp, '--adapter', 'caddyfile']);
+    } finally {
+        await removeContainerPath(containerName, tmp).catch(() => { });
+    }
 }
 
-async function validateCaddyfile(content) {
+async function validateCaddyfile(content, { adminUrl, configPath, containerName }) {
     try {
-        await adaptViaAdminApi(content);
+        await adaptViaAdminApi(content, adminUrl);
         return;
     } catch (adminErr) {
-        // The admin API adapts a piped body with no directory context, so a
-        // Caddyfile that uses relative `import` paths fails there even when it is
-        // valid. Retry against the real config directory before giving up.
         try {
-            await adaptViaCaddyBinary(content);
+            await adaptViaCaddyBinary(content, configPath, containerName);
             logger.info('Caddyfile validated via caddy binary (admin API adapt failed)');
             return;
         } catch (caddyErr) {
@@ -111,20 +125,17 @@ async function validateCaddyfile(content) {
     }
 }
 
-async function reloadViaCaddyBinary() {
-    await dockerExec(['caddy', 'reload', '--config', CADDY_CONFIG_PATH, '--adapter', 'caddyfile']);
+async function reloadViaCaddyBinary(configPath, containerName) {
+    await execInInstance(containerName, 'caddy', ['reload', '--config', configPath, '--adapter', 'caddyfile']);
 }
 
-// Reload Caddy, falling back to `caddy reload` (which resolves `import` relative
-// to the on-disk Caddyfile) when the admin /load endpoint rejects the piped body.
-// The caller must have written CADDY_CONFIG_PATH to disk first.
-async function reloadCaddy(content) {
+async function reloadCaddy(content, { adminUrl, configPath, containerName }) {
     try {
-        await caddyLoad(content);
+        await caddyLoad(content, adminUrl);
         return;
     } catch (loadErr) {
         try {
-            await reloadViaCaddyBinary();
+            await reloadViaCaddyBinary(configPath, containerName);
             logger.info('Caddy reloaded via caddy binary (admin /load failed)');
             return;
         } catch (caddyErr) {
@@ -226,12 +237,13 @@ function sortCaddyfile(content) {
 // GET /api/caddyfile
 // GET /api/caddyfile?download=true
 router.get('/', async (req, res) => {
-    const content = await readFile(CADDY_CONFIG_PATH, 'utf8');
+    const { configPath, containerName } = req.instance;
+    const content = await readContainerFile(containerName, configPath);
     if (req.query.download === 'true') {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         res.setHeader('Content-Disposition', `attachment; filename="Caddyfile-${timestamp}"`);
         res.setHeader('Content-Type', 'text/plain');
-        createReadStream(CADDY_CONFIG_PATH).pipe(res);
+        res.send(content);
         return;
     }
     res.type('text/plain').send(content);
@@ -239,9 +251,10 @@ router.get('/', async (req, res) => {
 
 // GET /api/caddyfile/history
 router.get('/history', async (req, res) => {
-    await ensureHistoryDir();
+    const dir = instanceHistoryDir(req.instance.id);
+    await ensureHistoryDir(req.instance.id);
     try {
-        const files = await readdir(HISTORY_PATH);
+        const files = await readdir(dir);
         const snapshots = files
             .filter(f => f.startsWith('Caddyfile-'))
             .sort()
@@ -264,7 +277,8 @@ router.get('/history/:filename', async (req, res) => {
     if (filename.includes('..') || filename.includes('/')) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
-    const content = await readFile(join(HISTORY_PATH, filename), 'utf8');
+    const dir = instanceHistoryDir(req.instance.id);
+    const content = await readFile(join(dir, filename), 'utf8');
     res.type('text/plain').send(content);
 });
 
@@ -274,7 +288,8 @@ router.delete('/history/:filename', async (req, res) => {
     if (filename.includes('..') || filename.includes('/')) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
-    await unlink(join(HISTORY_PATH, filename));
+    const dir = instanceHistoryDir(req.instance.id);
+    await unlink(join(dir, filename));
     res.json({ ok: true });
 });
 
@@ -289,7 +304,7 @@ router.post('/validations', async (req, res) => {
     logger.info(`Validating Caddyfile`, { bytes: content.length, fmt });
 
     try {
-        await validateCaddyfile(content);
+        await validateCaddyfile(content, req.instance);
         logger.info(`Caddyfile adapt validation passed`);
     } catch (err) {
         const output = ((err.stdout || '') + (err.stderr || '')).trim();
@@ -303,7 +318,7 @@ router.post('/validations', async (req, res) => {
     let formatted = null;
     if (fmt) {
         try {
-            formatted = await fmtCaddyfile(content);
+            formatted = await fmtCaddyfile(content, req.instance.containerName);
             logger.info(`Caddyfile fmt passed`);
         } catch (err) {
             logger.warn(`Caddyfile fmt failed`, { error: err.message });
@@ -317,8 +332,8 @@ router.post('/validations', async (req, res) => {
 // POST /api/caddyfile/reloads
 router.post('/reloads', async (req, res) => {
     logger.info(`Caddyfile reload requested`);
-    const content = await readFile(CADDY_CONFIG_PATH, 'utf8');
-    await reloadCaddy(content);
+    const content = await readContainerFile(req.instance.containerName, req.instance.configPath);
+    await reloadCaddy(content, req.instance);
     res.json({ ok: true, message: 'Caddy reloaded from disk' });
 });
 
@@ -334,11 +349,13 @@ router.put('/', async (req, res) => {
     const skipValidation = req.query.validate === 'false';
     logger.info(`Saving Caddyfile`, { bytes: content.length, fmt, sort, skipValidation });
 
+    const { configPath, containerName } = req.instance;
+
     if (skipValidation) {
         logger.warn(`Caddyfile save requested without validation (force save)`);
     } else {
         try {
-            await validateCaddyfile(content);
+            await validateCaddyfile(content, req.instance);
             logger.info(`Caddyfile pre-save validation passed`);
         } catch (err) {
             const output = ((err.stdout || '') + (err.stderr || '')).trim();
@@ -349,12 +366,12 @@ router.put('/', async (req, res) => {
         }
     }
 
-    await snapshotCaddyfile();
+    await snapshotCaddyfile(configPath, containerName, req.instance.id);
 
     let final = content;
     if (fmt) {
         try {
-            final = await fmtCaddyfile(final);
+            final = await fmtCaddyfile(final, containerName);
             logger.info(`Caddyfile formatted`);
         } catch (err) {
             logger.warn(`caddy fmt failed`, { error: err.message });
@@ -366,14 +383,14 @@ router.put('/', async (req, res) => {
         logger.info(`Caddyfile sorted`);
     }
 
-    const previous = await readFile(CADDY_CONFIG_PATH, 'utf8').catch(() => null);
-    await writeFile(CADDY_CONFIG_PATH, final, 'utf8');
+    const previous = await readContainerFile(containerName, configPath).catch(() => null);
+    await writeContainerFile(containerName, configPath, final);
 
     try {
-        await reloadCaddy(final);
+        await reloadCaddy(final, req.instance);
     } catch (err) {
         if (!skipValidation) {
-            if (previous !== null) await writeFile(CADDY_CONFIG_PATH, previous, 'utf8').catch(() => { });
+            if (previous !== null) await writeContainerFile(containerName, configPath, previous).catch(() => { });
             logger.warn(`Caddy reload failed, save rolled back`, { error: err.message });
             return res.status(422).json({ valid: false, errors: [`Caddy reload failed: ${err.message}`] });
         }

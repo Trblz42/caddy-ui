@@ -104,7 +104,7 @@ export default function Logs({ toast, onUnauth }) {
     );
 
     return (
-        <div className="gap-16">
+        <div className="gap-16 logs-page">
             <div className="card card-flush">
                 <div className={`card-header--clickable ${configOpen ? "is-open" : ""}`} onClick={() => setConfigOpen(o => !o)}>
                     <span className="section-label">Log Configuration</span>
@@ -167,7 +167,10 @@ export default function Logs({ toast, onUnauth }) {
 
             <div className="log-toolbar">
                 <div className="btn-row">
-                    <input className="search-input" placeholder="Search logs..." value={logSearch} onChange={e => setLogSearch(e.target.value)} />
+                    <div className="search-wrap">
+                        <input className="search-input search-input--clearable" placeholder="Search logs..." value={logSearch} onChange={e => setLogSearch(e.target.value)} />
+                        {logSearch && <button className="search-clear" onClick={() => setLogSearch("")} title="Clear search">✕</button>}
+                    </div>
                     {levelBtn("error", "ERROR")}
                     {levelBtn("warn", "WARN")}
                     {levelBtn("info", "INFO")}
