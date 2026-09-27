@@ -12,8 +12,17 @@ export function getAuthEnabled() {
 }
 export function setAuthEnabled(v) { localStorage.setItem('caddy_ui_auth_enabled', String(v)); }
 
-export function getTheme() { return localStorage.getItem('caddy_ui_theme') || 'dark'; }
-export function saveTheme(theme) { localStorage.setItem('caddy_ui_theme', theme); }
+export async function fetchSettings(onUnauth) {
+    return apiFetch('/settings', {}, onUnauth);
+}
+
+export async function saveSettings(updates, onUnauth) {
+    return apiFetch('/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+    }, onUnauth);
+}
 
 export function getInstanceId() { return localStorage.getItem('caddy_ui_instance') || 'default'; }
 export function setInstanceId(id) { localStorage.setItem('caddy_ui_instance', id); }

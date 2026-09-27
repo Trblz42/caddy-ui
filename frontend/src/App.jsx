@@ -10,10 +10,22 @@ import Instances from "./components/Instances.jsx";
 import Notifications from "./components/Notifications.jsx";
 import RoutesPage from "./components/Routes.jsx";
 import Sidebar from "./components/Sidebar.jsx";
+import ThemePicker from "./components/ThemePicker.jsx";
+import ThemeWelcome from "./components/ThemeWelcome.jsx";
 import TLS from "./components/TLS.jsx";
 import { Toasts, useToast } from "./components/Toasts.jsx";
-import { css } from "./styles.js";
-import { API, apiFetch, getAuthEnabled, getInstanceId, getTheme, getToken, saveTheme, setAuthEnabled, setToken } from "./utils/api.js";
+import { css, THEME_LIST } from "./styles.js";
+import { API, apiFetch, fetchSettings, getAuthEnabled, getInstanceId, getToken, saveSettings, setAuthEnabled, setToken } from "./utils/api.js";
+
+const VALID_THEME_IDS = new Set(THEME_LIST.map(t => t.id));
+
+const DEFAULTS = {
+    firstTimeRun: true,
+    theme: 'dark',
+    darkPalette: 'vt2026',
+    lightPalette: 'coarse-everywhere',
+    routeColumns: { status: true, title: true, upstream: true, server: true, id: true },
+};
 
 const TITLES = {
     "/dashboard": "Dashboard",
@@ -41,7 +53,12 @@ export default function App() {
         return !cached || !!getToken();
     });
     const [sessionExpired, setSessionExpired] = useState(false);
-    const [theme, setTheme] = useState(getTheme);
+    const [theme, setTheme] = useState(DEFAULTS.theme);
+    const [darkPalette, setDarkPalette] = useState(DEFAULTS.darkPalette);
+    const [lightPalette, setLightPalette] = useState(DEFAULTS.lightPalette);
+    const [routeColumns, setRouteColumns] = useState(DEFAULTS.routeColumns);
+    const [settingsLoaded, setSettingsLoaded] = useState(false);
+    const [showThemeWelcome, setShowThemeWelcome] = useState(false);
     const toast = useToast();
     const { dialog: confirmDialog, confirm, resolve: resolveConfirm } = useConfirm();
 
@@ -53,10 +70,49 @@ export default function App() {
     }, []);
 
     useEffect(() => {
+        if (!authed || settingsLoaded) return;
+        fetchSettings(onUnauth).then(s => {
+            const dk = VALID_THEME_IDS.has(s.darkPalette) ? s.darkPalette : DEFAULTS.darkPalette;
+            const lt = VALID_THEME_IDS.has(s.lightPalette) ? s.lightPalette : DEFAULTS.lightPalette;
+            setTheme(s.theme === 'light' ? 'light' : 'dark');
+            setDarkPalette(dk);
+            setLightPalette(lt);
+            setRouteColumns({ ...DEFAULTS.routeColumns, ...s.routeColumns });
+            setSettingsLoaded(true);
+            if (s.firstTimeRun) setShowThemeWelcome(true);
+        }).catch(() => {
+            setSettingsLoaded(true);
+        });
+    }, [authed, settingsLoaded, onUnauth]);
+
+    useEffect(() => {
         if (theme === 'light') document.documentElement.classList.add('light');
         else document.documentElement.classList.remove('light');
-        saveTheme(theme);
-    }, [theme]);
+        document.documentElement.setAttribute('data-palette', theme === 'dark' ? darkPalette : lightPalette);
+    }, [theme, darkPalette, lightPalette]);
+
+    const persistSettings = useCallback((updates) => {
+        saveSettings(updates, onUnauth).catch(() => {});
+    }, [onUnauth]);
+
+    const changeDarkPalette = (id) => { setDarkPalette(id); persistSettings({ darkPalette: id }); };
+    const changeLightPalette = (id) => { setLightPalette(id); persistSettings({ lightPalette: id }); };
+    const changeRouteColumns = (cols) => { setRouteColumns(cols); persistSettings({ routeColumns: cols }); };
+
+    const handleThemeWelcome = (dark, light) => {
+        setDarkPalette(dark);
+        setLightPalette(light);
+        setShowThemeWelcome(false);
+        persistSettings({ firstTimeRun: false, darkPalette: dark, lightPalette: light });
+    };
+
+    const toggleTheme = () => {
+        setTheme(t => {
+            const next = t === 'dark' ? 'light' : 'dark';
+            persistSettings({ theme: next });
+            return next;
+        });
+    };
 
     useEffect(() => {
         fetch(`${API}/auth/status`)
@@ -102,9 +158,6 @@ export default function App() {
         fetchStatus();
     }, [fetchStatus, navigate]);
 
-    const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
-
-    // Current path without query string for title lookup
     const basePath = '/' + location.pathname.split('/')[1];
     const title = TITLES[basePath] || "Dashboard";
 
@@ -137,9 +190,14 @@ export default function App() {
                                 <span className="page-title">{title}</span>
                             </div>
                             <div className="btn-row">
-                                <button className="theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
-                                    {theme === 'dark' ? '☀︎' : '☾︎'}
-                                </button>
+                                <ThemePicker
+                                    mode={theme}
+                                    onToggleMode={toggleTheme}
+                                    darkPalette={darkPalette}
+                                    lightPalette={lightPalette}
+                                    onDarkPaletteChange={changeDarkPalette}
+                                    onLightPaletteChange={changeLightPalette}
+                                />
                             </div>
                         </div>
                         <div className="content" key={instanceKey}>
@@ -147,7 +205,7 @@ export default function App() {
                                 <Route path="/" element={<Navigate to={noInstances ? "/instances" : "/dashboard"} replace />} />
                                 <Route path="/dashboard" element={<Dashboard status={status} toast={toast} onUnauth={onUnauth} />} />
                                 <Route path="/caddyfile" element={<CaddyFile toast={toast} onUnauth={onUnauth} theme={theme} confirm={confirm} />} />
-                                <Route path="/routes" element={<RoutesPage toast={toast} onUnauth={onUnauth} confirm={confirm} theme={theme} />} />
+                                <Route path="/routes" element={<RoutesPage toast={toast} onUnauth={onUnauth} confirm={confirm} theme={theme} routeColumns={routeColumns} onRouteColumnsChange={changeRouteColumns} />} />
                                 <Route path="/tls" element={<TLS toast={toast} onUnauth={onUnauth} confirm={confirm} />} />
                                 <Route path="/logs" element={<Logs toast={toast} onUnauth={onUnauth} />} />
                                 <Route path="/metrics" element={<Metrics toast={toast} onUnauth={onUnauth} />} />
@@ -159,6 +217,7 @@ export default function App() {
                     </div>
                     <Toasts toasts={toast.toasts} />
                     <ConfirmDialog dialog={confirmDialog} resolve={resolveConfirm} />
+                    {showThemeWelcome && <ThemeWelcome onComplete={handleThemeWelcome} />}
                 </div>
             )}
         </>
