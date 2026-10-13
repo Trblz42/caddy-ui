@@ -29,6 +29,7 @@ import { loadSettings } from './settings.js';
 import { initUptimeHistory } from './uptimeHistory.js';
 import { getUpdateInfo, noteFrontendVersion, startUpdateCheck } from './updateCheck.js';
 import { startUpstreamMonitor } from './upstreamMonitor.js';
+import { getEnabledLanguages } from './languages.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -88,6 +89,8 @@ app.use('/api/instances', authMiddleware, instancesRouter);
 app.use('/api/settings', authMiddleware, settingsRouter);
 app.use('/api/custom-themes', authMiddleware, customThemesRouter);
 
+// GET /api/languages -- always public, non-sensitive
+app.get('/api/languages', (req, res) => res.json({ languages: getEnabledLanguages() }));
 // caddy/ui application logs are global and must remain available even when
 // there is no valid Caddy instance to attach to the request.
 app.use('/api/logs/app', authMiddleware, appLogsRouter);
@@ -134,6 +137,7 @@ app.listen(PORT, () => {
     logger.info(`Caddy admin API`, { url: CADDY_ADMIN_URL });
     logger.info(`Caddyfile path`, { path: process.env.CADDY_CONFIG_PATH || '/etc/caddy/Caddyfile' });
     logger.info(`Public metrics`, { enabled: publicMetrics });
+    logger.info(`Enabled languages`, { languages: getEnabledLanguages() });
     initMonitor();
     initCaddyfileTitles().then(() => cleanupOrphanedNotes());
 });

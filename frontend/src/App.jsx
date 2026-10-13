@@ -11,15 +11,19 @@ import Notifications from "./components/Notifications.jsx";
 import RoutesPage from "./components/Routes.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import ThemePicker from "./components/ThemePicker.jsx";
+import LanguagePicker from "./components/LanguagePicker.jsx";
+import { fetchEnabledLanguages, loadLocale, resolveLocale } from "./i18n/index.js";
 import ThemeWelcome from "./components/ThemeWelcome.jsx";
 import TLS from "./components/TLS.jsx";
 import { Toasts, useToast } from "./components/Toasts.jsx";
 import { css, THEME_LIST, THEME_VAR_KEYS } from "./styles.js";
 import { API, apiFetch, fetchCustomThemes, fetchSettings, getAuthEnabled, getInstanceId, getToken, saveSettings, setAuthEnabled, setToken } from "./utils/api.js";
+import { useTranslation } from 'react-i18next';
 
 const DEFAULTS = {
     firstTimeRun: true,
     theme: 'dark',
+    language: null,
     darkPalette: 'vt2026',
     lightPalette: 'coarse-everywhere',
     routeColumns: { status: true, title: true, upstream: true, server: true, id: true },
@@ -27,18 +31,19 @@ const DEFAULTS = {
     routeCheckExcludes: [],
 };
 
-const TITLES = {
-    "/dashboard": "Dashboard",
-    "/caddyfile": "Caddyfile Editor",
-    "/routes": "Route Manager",
-    "/tls": "TLS Certificates",
-    "/logs": "Access Logs",
-    "/metrics": "Metrics",
-    "/notifications": "Notifications",
-    "/instances": "Instances",
+const TITLE_KEYS = {
+    '/dashboard': 'pages.dashboard',
+    '/caddyfile': 'pages.caddyfile',
+    '/routes': 'pages.routes',
+    '/tls': 'pages.tls',
+    '/logs': 'pages.logs',
+    '/metrics': 'pages.metrics',
+    '/notifications': 'pages.notifications',
+    '/instances': 'pages.instances',
 };
 
 export default function App() {
+    const { t } = useTranslation();
     const location = useLocation();
     const navigate = useNavigate();
     const [status, setStatus] = useState(null);
@@ -53,6 +58,9 @@ export default function App() {
         return !cached || !!getToken();
     });
     const [sessionExpired, setSessionExpired] = useState(false);
+    const [language, setLanguage] = useState(DEFAULTS.language);
+    const [enabledLanguages, setEnabledLanguages] = useState(['en']);
+    const [languageReady, setLanguageReady] = useState(false);
     const [theme, setTheme] = useState(DEFAULTS.theme);
     const [darkPalette, setDarkPalette] = useState(DEFAULTS.darkPalette);
     const [lightPalette, setLightPalette] = useState(DEFAULTS.lightPalette);
@@ -73,8 +81,44 @@ export default function App() {
     }, []);
 
     useEffect(() => {
-        if (!authed || settingsLoaded) return;
-        Promise.all([fetchSettings(onUnauth), fetchCustomThemes(onUnauth).catch(() => [])]).then(([s, custom]) => {
+        let cancelled = false;
+
+        async function bootstrapLanguage() {
+            try {
+                const enabled = await fetchEnabledLanguages();
+                const resolved = resolveLocale(enabled, null);
+
+                await loadLocale(resolved);
+
+                if (cancelled) return;
+
+                setEnabledLanguages(enabled);
+                setLanguage(resolved);
+            } catch {
+                await loadLocale('en');
+
+                if (cancelled) return;
+
+                setEnabledLanguages(['en']);
+                setLanguage('en');
+            } finally {
+                if (!cancelled) setLanguageReady(true);
+            }
+        }
+
+        bootstrapLanguage();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!authed || !languageReady || settingsLoaded) return;
+        Promise.all([
+            fetchSettings(onUnauth),
+            fetchCustomThemes(onUnauth).catch(() => []),
+        ]).then(([s, custom]) => {
             setCustomThemes(custom);
             const validIds = new Set([...THEME_LIST, ...custom].map(t => t.id));
             const dk = validIds.has(s.darkPalette) ? s.darkPalette : DEFAULTS.darkPalette;
@@ -87,10 +131,16 @@ export default function App() {
             setRouteCheckExcludes(Array.isArray(s.routeCheckExcludes) ? s.routeCheckExcludes : []);
             setSettingsLoaded(true);
             if (s.firstTimeRun) setShowThemeWelcome(true);
+
+            // Applied last so a locale chunk that fails to load (e.g. a stale
+            // hash after a redeploy) leaves the UI in its current language
+            // instead of discarding the rest of the settings.
+            const resolvedLanguage = resolveLocale(enabledLanguages, s.language ?? null);
+            loadLocale(resolvedLanguage).then(() => setLanguage(resolvedLanguage)).catch(() => {});
         }).catch(() => {
             setSettingsLoaded(true);
         });
-    }, [authed, settingsLoaded, onUnauth]);
+    }, [authed, languageReady, settingsLoaded, enabledLanguages, onUnauth]);
 
     const allThemes = [...THEME_LIST, ...customThemes];
 
@@ -114,6 +164,19 @@ export default function App() {
     const persistSettings = useCallback((updates) => {
         saveSettings(updates, onUnauth).catch(() => {});
     }, [onUnauth]);
+
+    const changeLanguage = async (lang) => {
+        if (!enabledLanguages.includes(lang)) return;
+
+        try {
+            await loadLocale(lang);
+        } catch {
+            toast.error(t('errors.languageLoadFailed'));
+            return;
+        }
+        setLanguage(lang);
+        persistSettings({ language: lang });
+    };
 
     const changeDarkPalette = (id) => { setDarkPalette(id); persistSettings({ darkPalette: id }); };
     const changeLightPalette = (id) => { setLightPalette(id); persistSettings({ lightPalette: id }); };
@@ -156,7 +219,9 @@ export default function App() {
                 setNoInstances(true);
                 setStatus(null);
             } else {
-                setStatus({ online: false, error: "Could not reach backend" });
+                // Translated at render time so switching languages doesn't
+                // recreate this callback and re-poll /status.
+                setStatus({ online: false, errorKey: 'errors.backendUnreachable' });
             }
         });
     }, [onUnauth]);
@@ -186,12 +251,12 @@ export default function App() {
     }, [fetchStatus, navigate]);
 
     const basePath = '/' + location.pathname.split('/')[1];
-    const title = TITLES[basePath] || "Dashboard";
+    const title = t(TITLE_KEYS[basePath] || 'pages.dashboard');
 
     return (
         <>
             <style>{css}</style>
-            {authed === null ? null : !authed ? (
+            {authed === null || !languageReady ? null : !authed ? (
                 <Login onLogin={() => { setAuthed(true); setSessionExpired(false); }} sessionExpired={sessionExpired} />
             ) : (
                 <div className="shell">
@@ -217,6 +282,13 @@ export default function App() {
                                 <span className="page-title">{title}</span>
                             </div>
                             <div className="btn-row">
+                                {language && enabledLanguages.length > 1 && (
+                                    <LanguagePicker
+                                        languages={enabledLanguages}
+                                        language={language}
+                                        onLanguageChange={changeLanguage}
+                                    />
+                                )}
                                 <ThemePicker
                                     themes={allThemes}
                                     mode={theme}
@@ -245,7 +317,7 @@ export default function App() {
                     </div>
                     <Toasts toasts={toast.toasts} />
                     <ConfirmDialog dialog={confirmDialog} resolve={resolveConfirm} />
-                    {showThemeWelcome && <ThemeWelcome themes={allThemes} onComplete={handleThemeWelcome} />}
+                    {showThemeWelcome && <ThemeWelcome themes={allThemes} languages={enabledLanguages} language={language} onLanguageChange={changeLanguage} onComplete={handleThemeWelcome} />}
                 </div>
             )}
         </>

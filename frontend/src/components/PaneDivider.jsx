@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { formatPercent } from "../utils/format.js";
 
 export default function PaneDivider({ containerRef, primaryMinimumRef, secondaryMinimumRef, secondaryControlsRef, primaryPaneId, value, onChange }) {
+    const { t } = useTranslation();
     const dividerRef = useRef(null);
     const [limits, setLimits] = useState({ min: 0, max: 100 });
 
@@ -68,15 +71,15 @@ export default function PaneDivider({ containerRef, primaryMinimumRef, secondary
             ref={dividerRef}
             className="pane-divider"
             role="separator"
-            aria-label="Resize editor and history panes"
+            aria-label={t("caddyfile.resizePanes")}
             aria-orientation="horizontal"
             aria-controls={primaryPaneId}
             aria-valuemin={Math.round(limits.min)}
             aria-valuemax={Math.round(limits.max)}
             aria-valuenow={Math.round(value)}
-            aria-valuetext={`${Math.round(value)}% editor, ${Math.round(100 - value)}% history`}
+            aria-valuetext={t("caddyfile.paneSizes", { editor: formatPercent(Math.round(value)), history: formatPercent(Math.round(100 - value)) })}
             tabIndex={0}
-            title="Drag or use arrow keys to resize. Double-click to reset."
+            title={t("caddyfile.resizePanesHint")}
             onPointerDown={event => {
                 if (event.button !== 0) return;
                 event.preventDefault();
