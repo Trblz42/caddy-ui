@@ -71,6 +71,7 @@ instances, optional authentication, and responsive dark/light themes.
 
 ### Frontend
 
+<!-- ANCHOR: frontend-features -->
 <!-- dockerhub:frontend:start -->
 - **Dashboard** — Live server status, TLS state, an HTTP servers table (label, Server ID, listen address, route count) with optional labels, upstream health overview, and Caddy process info (version, uptime, memory, last reload)
 - **Caddyfile Editor** — Edit your Caddyfile with [real Caddyfile-grammar syntax highlighting](https://zackwag.github.io/caddy-ui/caddyfile.html#caddyfile-syntax-highlighting) (directives, matchers, placeholders, env vars — not a generic nginx approximation), live validation, `caddy fmt` formatting, automatic site block sorting, export/import, and full version history with inline preview and one-click rollback
@@ -87,9 +88,11 @@ instances, optional authentication, and responsive dark/light themes.
 - **Multi-Instance** — Manage multiple Caddy instances from a single UI. Auto-discover Caddy containers on your Docker network, add/edit/remove instances from the Instances page, and switch between them with the sidebar instance switcher
 - **Mobile Friendly** — Responsive layout with collapsible sidebar
 <!-- dockerhub:frontend:end -->
+<!-- ANCHOR_END: frontend-features -->
 
 ### Backend
 
+<!-- ANCHOR: backend-features -->
 <!-- dockerhub:backend:start -->
 - Proxies requests to Caddy's admin API (`/config`, `/id`, `/load`)
 - Reads and writes the Caddyfile on disk
@@ -116,6 +119,7 @@ instances, optional authentication, and responsive dark/light themes.
 - Structured JSON logging with configurable log level via `LOG_LEVEL`
 - Enriched status endpoint with route count, upstream health, and uptime for Homepage widget support
 <!-- dockerhub:backend:end -->
+<!-- ANCHOR_END: backend-features -->
 <!-- ANCHOR_END: features -->
 
 </details>
@@ -123,7 +127,7 @@ instances, optional authentication, and responsive dark/light themes.
 ## Get started
 
 You need Docker Compose and a Caddy container with its admin API enabled inside your Docker network.
-Follow the [setup guide](https://zackwag.github.io/caddy-ui/setup.html) to configure Caddy,
+Follow the [quickstart guide](https://zackwag.github.io/caddy-ui/setup.html) to configure Caddy,
 create the required directories, and deploy both caddy/ui containers. Then open
 `http://your-server:9877` and add or discover your instance.
 
@@ -136,11 +140,14 @@ create the required directories, and deploy both caddy/ui containers. Then open
 
 ### Prerequisites
 
+<!-- ANCHOR: quick-start-prerequisites -->
 - Docker and Docker Compose
 - An existing Caddy container with the admin API enabled on `0.0.0.0:2019`
+<!-- ANCHOR_END: quick-start-prerequisites -->
 
 ### 1. Enable Caddy's admin API
 
+<!-- ANCHOR: quick-start-admin-api -->
 Add the following to your Caddyfile global block:
 
 ```caddyfile
@@ -151,22 +158,28 @@ Add the following to your Caddyfile global block:
 ```
 
 > Note: the `CADDY_ADMIN` environment variable does not configure this — it must be set in the Caddyfile.
+<!-- ANCHOR_END: quick-start-admin-api -->
 
 ### 2. Create required directories
 
+<!-- ANCHOR: quick-start-directories -->
 ```bash
 mkdir -p /docker/caddy/logs
 mkdir -p /docker/caddy-ui
 ```
+<!-- ANCHOR_END: quick-start-directories -->
 
 ### 3. Generate a JWT secret (if using auth)
 
+<!-- ANCHOR: quick-start-auth -->
 ```bash
 openssl rand -base64 32
 ```
+<!-- ANCHOR_END: quick-start-auth -->
 
 ### 4. Update your compose file
 
+<!-- ANCHOR: quick-start-compose -->
 ```yaml
 services:
   caddy:
@@ -228,23 +241,26 @@ networks:
 ```
 
 The backend only needs two volumes: the **Docker socket** (to interact with Caddy containers via `docker exec` and discover new instances) and its own **config directory** (for instance registry, history, and settings). No Caddy volume mounts required — all Caddyfile, log, and certificate operations go through the Docker socket.
+<!-- ANCHOR_END: quick-start-compose -->
 
 ### 5. Deploy
 
+<!-- ANCHOR: quick-start-deploy -->
 ```bash
 docker compose up -d
 ```
 
 Open `http://your-server:9877` in your browser.
+<!-- ANCHOR_END: quick-start-deploy -->
 
 <!-- dockerhub:both:end -->
 <!-- ANCHOR_END: quick-start -->
 
 </details>
 
-<!-- ANCHOR: architecture -->
 <!-- dockerhub:both:start -->
 ## Architecture
+<!-- ANCHOR: architecture -->
 caddy/ui runs as two services: a React frontend served by Nginx and a Node.js/Express backend. The frontend proxies API requests to the backend, which communicates with Caddy's admin API.
 
 In Docker mode, the backend uses the Docker socket for container discovery and file operations inside Caddy containers. Its persistent configuration directory stores application settings and instance data. Local mode supports Caddy installations outside Docker. The Caddyfile remains the source of truth.
@@ -388,9 +404,9 @@ The status endpoint returns enriched data for use with [Homepage](https://gethom
 <!-- ANCHOR_END: homepage-widget -->
 
 
-<!-- ANCHOR: api-endpoints -->
 <!-- dockerhub:backend:start -->
 ## API Endpoints
+<!-- ANCHOR: api-endpoints -->
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -481,7 +497,7 @@ for versioned image tags and release notes.
 
 ## Localization
 
-![Localization coverage](docs/localization-coverage.svg)
+![Localization coverage](docs/src/assets/localization-coverage.svg)
 
 English (`frontend/src/i18n/locales/en.js`) is the canonical localization schema and fallback language. Additional locale catalogs may translate any subset of the English keys; missing keys fall back to English. Locale catalogs may not introduce keys or key-tree shapes that do not exist in `en.js`.
 
