@@ -1,5 +1,5 @@
 export function visibleText(value) {
-    return (value || '').replace(/<\/?(?:code|strong|b|em|i|\d+)>/g, '').replace(/\s+/g, ' ').trim();
+    return (value || '').replace(/<\/?(?:code|strong|b|em|i|tld|\d+)>/g, '').replace(/\s+/g, ' ').trim();
 }
 
 // Runtime observations are matched to real text/attributes. Wording shared by
@@ -14,7 +14,7 @@ export function markReferences(root, selected, observations) {
     const references = [];
     for (const element of root.querySelectorAll('*')) {
         if (!element.getClientRects().length || ['SCRIPT', 'STYLE'].includes(element.tagName) || getComputedStyle(element).visibility === 'hidden') continue;
-        const attributes = ['placeholder', 'title', 'aria-label'].filter(name => selectedValues.has(visibleText(element.getAttribute(name) || '')));
+        const attributes = ['placeholder', 'title', 'aria-label', 'aria-valuetext'].filter(name => selectedValues.has(visibleText(element.getAttribute(name) || '')));
         const text = visibleText(element.textContent || '');
         const wholeText = selectedValues.has(text) && ![...element.children].some(child => visibleText(child.textContent || '') === text);
         const textValues = [...element.childNodes].filter(node => node.nodeType === Node.TEXT_NODE)

@@ -13,9 +13,14 @@ owns the preview's browser/build dependencies. Existing frontend preview command
 remain forwarding aliases, while the root commands are the shared entry points.
 Open http://127.0.0.1:5174. No backend, Docker container, account, or API mocks are required.
 `npm run i18n:preview:build` produces a separate `src/frontend/dist-playground/` build; the production entry and build are unchanged.
+Preview, build and browser-check commands prepare the generated Caddyfile editor mode through
+the existing fetch script. A clean checkout needs network access for that first fetch; later
+fetch failures can use the existing local copy.
 
 Search canonical English keys or saved values, choose an installed locale, and select a key.
 Registered component states appear above the English reference and saved locale value.
+Keys with a registered live preview have a small accent dot beside their name in the key list;
+the legend and tooltip explain it. The marker is independent of the saved translation's status.
 Choose a state in **Component state**. Each preview mounts actual production components
 and styles in its own frame, with its own translation instance and in-memory storage.
 Typing in **Try translation** updates every matching preview. Drafts are kept separately per
@@ -42,7 +47,7 @@ Non-English translations must still be human-authored or human-reviewed under CO
 - `PreviewFrame.jsx`: frame communication, DOM references, and visible replay failures.
 - `capture.mjs` / `capture-source.mjs`: real Caddy capture and source provenance.
 - `capture-format.js`: capture validation and strict request/response replay.
-- `captures/dashboard.json`: generated running, empty-server, stopped-Caddy, and default notification configuration responses.
+- `captures/dashboard.json`: generated Dashboard, default notification, Metrics and access-log responses.
 - `workbench.css`: contributor layout.
 - `vite.config.js`: separate entry, dev server, and output directory.
 
@@ -54,7 +59,7 @@ One state may cover several keys, and shared keys can occur in several states.
 Current states cover the Dashboard with running/stopped Caddy and no HTTP servers, its loading
 view, label-edit dialog, and successful label save; route/certificate confirmations and a
 notification toast remain available. Unregistered keys explicitly show that no fixture exists.
-Registered states cover 96 distinct keys. The onboarding and appearance states add 27:
+Registered states cover 285 distinct keys. The onboarding and appearance states add 27:
 
 | Production component | Prepared states | New keys |
 | --- | --- | ---: |
@@ -91,6 +96,124 @@ persist configuration or send notifications. Returning to another prepared state
 local form values from the captured defaults. Translation edits within a state preserve form
 values. The standalone preview still needs no running backend or Docker.
 
+Five observability states add 43 distinct keys: 15 Metrics labels/hints, 12 access-log labels,
+search/plural messages, six uptime controls/empty states, and ten shared controls. They mount
+production `Metrics` (including `UpstreamUptime`) and `Logs`. The existing real-Caddy capture
+now records the Metrics/auth/configuration/route reads and access-log/default configuration
+reads from its isolated instance. It sends one real health request and one deliberate 503
+request to seed access logs and metrics. Client addresses in the saved log lines are normalized
+to documentation-only addresses. No response contract is written by hand.
+
+The Metrics configuration opens through its production header; route checks toggle only local
+fixture props and replay existing reads. They do not persist settings or probe external sites.
+The Logs preview opens its production form and can enable its controls locally. The captured
+log-settings API defaults remain disabled even though the harness Caddyfile writes access logs;
+this distinction is preserved. The filtered state uses the production search URL parameter,
+and the disabled state shows the untouched API defaults. Form edits survive translation edits
+within a state; changing the prepared state restores the captured defaults.
+
+Refresh and log export use the recorded reads/local production exporter. No Metrics or Logs
+configuration writes or live SSE streams are recorded. Save, the Caddy Metrics toggle, switching
+to unrecorded application logs, and live streaming remain behind the existing strict replay
+guard. They cannot contact a backend. Transient saving/refreshing text and the Live button's
+unrecorded Stop state are not counted as registered coverage. The Live and Save labels share
+a single text node with their leading symbols; the exact DOM matcher cannot identify them
+separately, so they are not registered in these states. Use `metrics-overview`,
+`metrics-route-checks`, `logs-configured`, `logs-filtered`, and `logs-disabled` in preview links.
+
+Seven TLS and sidebar states add 33 distinct keys: 17 certificate controls, installation
+instructions and empty messages, plus 16 navigation, connection and version labels.
+`tls-empty`, `tls-valid`, `tls-expiring` and `tls-expired` mount production `TLS` against a
+real captured empty certificate store. Filter cards use their real click handlers; Refresh
+replays the same read. The rich-text root CA hint is matched across its production spans.
+Certificate rows, certificate actions, loading/success messages and filter suffixes that
+share a text node with a leading dash are not counted in this batch. No root CA download is
+recorded; clicking Download Root CA reports an unrecorded window request without opening
+a connection.
+
+`sidebar-online`, `sidebar-stopped` and `sidebar-checking` mount production `Sidebar` with
+captured version, instance-list and instance-status reads. Connected/unreachable status comes
+from real running/stopped Caddy responses; checking deliberately leaves the status pending.
+The preview pins the frontend version to `dev` to match the captured version query. Navigation
+stays in the frame's memory router; status-refresh and sign-out callbacks are inert. The
+sidebar uses a finite-height production shell to keep frame sizing stable. Update notices
+and the multiple-instance switcher need their own capture scenarios and are not counted.
+
+Six route-management and history states add another 31 distinct keys. `routes-overview`
+mounts production `Routes` with captured Caddy routes, labels, notes, maintenance, TLS and
+health reads. `routes-columns` opens its actual column menu and hides ID through the real
+checkbox handler; these preferences stay inside the frame. `routes-add` opens the production
+new-route form. `routes-filtered` uses the production filter URL parameter, while
+`routes-empty` replays a real Caddy configuration with no HTTP servers. Form fields, filters
+and column choices survive draft edits within a state. No route writes are recorded:
+submitting Add Route fails visibly through strict replay and cannot change a backend.
+
+`route-history-empty` mounts production `RouteHistoryModal` against actual empty history
+reads for an unmonitored documentation hostname. Reading its history does not enable checks
+or probe that hostname. All four range queries are captured. The profile stores its observed
+epoch clock; only this frame's `Date.now()` is frozen to that value so the component's exact
+`since` query parameters replay without loosening request matching. Range buttons and the
+auto-refresh checkbox remain usable; other states use the normal clock. The Close callback is
+inert in this standalone dialog. Populated history, relative-time messages, transient loading
+states and visually hidden status text are not counted as covered by this batch.
+
+Thirteen Caddyfile and route-edit states add 32 distinct keys. The Caddyfile states mount
+production `CaddyFile`, CodeMirror, `PaneDivider`, confirmation dialogs and toasts. Capture
+reads the initial empty history, then saves a comment-only revision twice through the real
+API in its private instance. This creates distinct older/latest snapshots for the actual
+diff, raw, identical-file and version-list views. The only replayed editor action response is
+a successful validation of the exact captured buffer. Saves, reloads, snapshot deletion,
+restore and import writes have no recorded response and fail visibly through strict replay.
+Export also reports an unrecorded window request. No preview can change a backend.
+
+Use `caddyfile-editor`, `caddyfile-empty`, `caddyfile-empty-list`, `caddyfile-diff`,
+`caddyfile-raw`, `caddyfile-no-differences`, `caddyfile-list`, `caddyfile-valid`, and the
+`caddyfile-force-confirm`, `caddyfile-restore-confirm`, `caddyfile-delete-confirm` and
+`caddyfile-import-confirm` states. The force-save state prepares an unsaved comment through
+CodeMirror's transaction listener. Import uses a frame-local file to open the real confirmation.
+Cached confirmations and validation feedback are rebuilt when their translations change.
+The editor shell has a finite height, and context refreshes retain the last iframe height to
+keep responsive controls stable. The pane divider's translated accessible value is inspected
+through `aria-valuetext`; its label and hint are visible on desktop layouts.
+
+`route-edit-unavailable` opens the actual route editor for a captured route whose Caddyfile
+block lookup fails. The failed read is recorded alongside its supporting reads. The title
+placeholder, clear-title hint and rich-text load failure are registered inside the dialog.
+Native option-only strings, transient progress messages, symbol-prefixed status text and
+unrecorded save results are not counted as new coverage in this batch.
+
+Eleven instance, certificate and populated-uptime states add 50 keys: 30 instance-management
+keys, 10 certificate-row labels and 10 uptime summary/table labels. `instances-local`,
+`instances-add`, `instances-edit`, `instances-invalid`, `instances-remove`,
+`instances-discovery-empty`, `instances-empty` and `instances-missing-server` mount production
+`Instances`. Capture starts a second real backend with separate state and a deliberately
+unavailable Docker socket. It creates a local-mode instance through the API, captures its
+reads while Caddy has servers and after those servers are removed, then deletes only that
+private instance to capture the empty registry. Discovery's empty result is the backend's
+real Docker-unavailable fallback; capture never discovers unrelated host containers. The
+recorded empty-registry server-label read retains its actual HTTP 503 response.
+
+Add/edit forms, field validation, removal confirmation and discovery use their real handlers.
+Cached messages are prepared again after translation changes; ordinary form drafts stay local
+and survive translation edits. No instance writes are replayed. Add, Save and confirmed Remove
+report unrecorded requests. Changing the admin URL to an unrecorded destination similarly
+reports a missing server lookup without contacting that destination. Discovery reads and
+background polls replay the same defaults without accessing Docker or a backend.
+
+`tls-internal-valid` and `tls-internal-orphaned` show a real `preview.internal` certificate.
+Capture temporarily configures an internal-CA-only TLS listener in its disposable Caddy,
+waits for issuance, reads the metadata, then removes the named host and reads its orphaned
+status. It never uses ACME, requests an external hostname, or records a private key. The
+orphaned state opens the production filter through its counter. Certificate removal remains
+inert. Expiring, expired, superseded and external-issuer rows are not claimed in this batch.
+
+`uptime-route-pending` mounts production `UpstreamUptime` using the captured named route and
+empty recorded check statistics. Route-check toggles and exclusions change frame-local props;
+they do not enable backend checks or probe the hostname. The summary shows actual missing-data
+values. History for this new target has no captured requests and fails visibly if opened.
+Discovered-container lists, successful instance writes, native option-only labels and visually
+hidden uptime status text are not counted as new coverage.
+
 The label dialog is opened through the production edit action, and the saved-label state runs
 the actual Save handler against its recorded response. Navigation stays inside the selected
 component preview; this tool is not a replacement for testing the complete application.
@@ -106,8 +229,10 @@ SIGINT/SIGTERM. A failed capture keeps the previous JSON file. No existing devel
 or production configurations are modified. Use Linux CI, a Dev Container, or WSL for capture;
 the ordinary playground preview requires neither Docker nor a backend.
 It also reads untouched notification defaults without writing provider settings or sending
-test messages. The artifact retains its existing `dashboard.json` name and includes a
-`notifications-default` profile alongside the three Dashboard profiles.
+test messages. The artifact retains its existing `dashboard.json` name. Its 21 profiles cover
+Dashboard, notifications, metrics, logs, TLS, sidebar, routes, route history, Caddyfile history,
+uptime, and instances. The capture seeds access logs and configuration changes only on its own
+Caddy instance and never contacts a notification destination or remote upstream.
 
 From the repository root:
 
@@ -122,7 +247,9 @@ Captures contain request methods, paths, write bodies, response statuses/headers
 source commit, source fingerprint, and Caddy image. Normalization preserves structure and
 request-ID correlations while replacing private addresses and paths and shifting ISO
 timestamps together to preserve their relative spacing.
-Numeric measurements remain as observed and are frozen during replay. Regeneration is not
+Numeric measurements remain as observed and are frozen during replay. History profile clocks
+and numeric epoch query parameters also remain as observed. Snapshot filenames and their
+local-time timestamps retain their observed values so history request paths stay aligned. Regeneration is not
 expected to be byte-identical across machines. Do not hand-edit generated responses.
 
 The **Localization preview data** workflow publishes an artifact on relevant `main` changes
@@ -131,8 +258,8 @@ not the playground or its browser check. Download the artifact, review the diff,
 `dev/playground/captures/dashboard.json` in a normal commit. It does not push commits or open PRs.
 
 The preview warns if the capture fingerprint differs from its current backend, Dashboard,
-Notifications, or API
-sources or backend dependencies. Source changes restart the dev server to recompute the
+Notifications, Metrics, Logs, TLS, Sidebar, Routes, route history, Caddyfile, divider, diff, Instances, instance-status, uptime or
+API sources or backend dependencies. Source changes restart the dev server to recompute the
 fingerprint; this reload discards drafts. The production application build is unchanged.
 Unrecorded requests, query variants, write bodies, and unsupported transports fail visibly;
 there is no forwarding to a live backend. Loading is an explicit UI state, not an invented
@@ -141,7 +268,7 @@ server response. Backend-provided strings stay as returned and may have no trans
 ## DOM context and browser agents
 
 The frame observes the keys, resolved values, and interpolation parameters used by production
-components. It highlights matching text or `placeholder`, `title`, and `aria-label` attributes.
+components. It highlights matching text or `placeholder`, `title`, `aria-label`, and `aria-valuetext` attributes.
 Selectors and parameters appear under **DOM selectors and interpolation values**. Repeated
 wording belonging to different observed keys is marked ambiguous with dashed highlights;
 these matches provide context, not proof of a unique key-to-node mapping. Empty values and
@@ -177,8 +304,24 @@ session-message refresh across locales, verifies theme-export interpolation and 
 and checks that the login card and open theme menu fit their frames without resize feedback.
 It also edits and resets every one of the 30 notification settings keys, checks all five
 provider states, and proves that attempted notification saves/sends do not reach a server.
+It also edits and resets every one of the 43 observability keys, checks interpolation context,
+local route-check toggles, log-form state retention and reset, search results, and blocked
+Metrics/Logs configuration writes. These browser checks remain optional and are not added to CI.
 
-Confirmation actions remain inert. Their normal keyboard listeners are confined to their frame.
+It also edits and resets all 33 TLS/sidebar keys, checks TLS filter refresh and version
+interpolation, and verifies bounded sidebar frames and blocked root CA downloads.
+It also edits and resets all 31 route/history keys, checks retained form/column state, blocked
+route creation, search interpolation and clearing, all four history ranges, and clock isolation.
+It edits and resets all 32 Caddyfile/route-edit keys, checks pane keyboard resizing and local
+editor state retention, and exercises blocked force-save, restore, delete, import and export.
+It edits and resets all 50 instance/certificate/uptime keys, checks instance form retention,
+blocked instance writes, discovery replay, certificate plural interpolation and local uptime
+exclusion controls. Capture checks verify cleanup of both backend processes, including a
+deliberate failure immediately after the second backend starts.
+
+The standalone route/certificate confirmation fixtures remain inert. Caddyfile confirmations
+run their production handlers against strict replay; unrecorded writes are blocked. Keyboard
+listeners are confined to their frame.
 The light toggle applies an actual production palette to the preview. Prepared action-generated
 messages are rebuilt on draft/locale changes so cached messages update without changing app code.
 

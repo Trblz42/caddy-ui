@@ -71,4 +71,87 @@ describe('localization playground', () => {
         expect(keys.has('notifications.customWebhook')).toBe(false);
         expect(keys.has('notifications.sending')).toBe(false);
     });
+    it('adds 43 observability keys using read-only real-capture profiles', () => {
+        const added = scenarios.filter(scenario => ['metrics', 'logs'].includes(scenario.kind));
+        const existing = new Set(scenarios.filter(scenario => !added.includes(scenario) && !['tls', 'sidebar', 'routes', 'route-history'].includes(scenario.kind)).flatMap(scenario => scenario.keys));
+        const keys = new Set(added.flatMap(scenario => scenario.keys));
+        expect(added).toHaveLength(5);
+        expect([...keys].filter(key => !existing.has(key))).toHaveLength(43);
+        for (const profileId of new Set(added.map(scenario => scenario.profile))) {
+            const profile = capture.scenarios.find(profile => profile.id === profileId);
+            expect(profile).toBeDefined();
+            expect(profile.requests.every(record => record.request.method === 'GET')).toBe(true);
+        }
+        // Transient messages and live transport are not claimed as visible
+        // coverage when no corresponding response/stream is recorded.
+        expect(keys.has('logs.stop')).toBe(false);
+        expect(keys.has('logs.live')).toBe(false);
+        expect(keys.has('common.save')).toBe(false);
+        expect(keys.has('metrics.enabledToast')).toBe(false);
+        expect(keys.has('metrics.refreshing')).toBe(false);
+    });
+    it('adds 33 TLS and sidebar keys backed by read-only captures', () => {
+        const added = scenarios.filter(scenario => ['tls', 'sidebar'].includes(scenario.kind));
+        const existing = new Set(scenarios.filter(scenario => !added.includes(scenario)).flatMap(scenario => scenario.keys));
+        const keys = new Set(added.flatMap(scenario => scenario.keys));
+        expect(added).toHaveLength(7);
+        expect([...keys].filter(key => !existing.has(key))).toHaveLength(33);
+        for (const profileId of new Set(added.map(scenario => scenario.profile))) {
+            const profile = capture.scenarios.find(profile => profile.id === profileId);
+            expect(profile).toBeDefined();
+            expect(profile.requests.every(record => record.request.method === 'GET')).toBe(true);
+        }
+        // Filter suffixes share a text node with a leading dash and are not
+        // separate exact DOM matches. Certificate rows need a populated store.
+        expect(keys.has('tls.filter.valid')).toBe(false);
+        expect(keys.has('tls.validUpper')).toBe(false);
+        expect(keys.has('sidebar.updateAvailable')).toBe(false);
+    });
+    it('adds 31 route management and history keys from real read-only profiles', () => {
+        const added = scenarios.filter(scenario => ['routes', 'route-history'].includes(scenario.kind));
+        const existing = new Set(scenarios.filter(scenario => !added.includes(scenario)).flatMap(scenario => scenario.keys));
+        const keys = new Set(added.flatMap(scenario => scenario.keys));
+        expect(added).toHaveLength(6);
+        expect([...keys].filter(key => !existing.has(key))).toHaveLength(31);
+        for (const profileId of new Set(added.map(scenario => scenario.profile))) {
+            const profile = capture.scenarios.find(profile => profile.id === profileId);
+            expect(profile.requests.every(record => record.request.method === 'GET')).toBe(true);
+        }
+        expect(keys.has('routes.added')).toBe(false);
+        expect(keys.has('routeHistory.online')).toBe(false);
+        expect(keys.has('routes.noUpstreamStatus')).toBe(false);
+    });
+    it('adds 32 Caddyfile and unavailable route-block keys with real captures', () => {
+        const added = scenarios.filter(scenario => ['caddyfile', 'route-edit'].includes(scenario.kind));
+        const existing = new Set(scenarios.filter(scenario => !added.includes(scenario)).flatMap(scenario => scenario.keys));
+        const keys = new Set(added.flatMap(scenario => scenario.keys));
+        expect(added).toHaveLength(13);
+        expect([...keys].filter(key => !existing.has(key))).toHaveLength(32);
+        const profile = capture.scenarios.find(scenario => scenario.id === 'caddyfile-history');
+        expect(profile.requests.filter(record => record.request.method !== 'GET').map(record => record.request.path))
+            .toEqual(['/caddyfile/validations?fmt=true']);
+        expect(keys.has('caddyfile.vsCurrent')).toBe(false);
+        expect(keys.has('caddyfile.savedReloaded')).toBe(false);
+        expect(keys.has('caddyfile.upToDate')).toBe(false);
+    });
+    it('adds 50 instance, certificate and populated uptime keys from real reads', () => {
+        const added = scenarios.filter(scenario => ['instances', 'tls-certificates', 'uptime-populated'].includes(scenario.kind));
+        const existing = new Set(scenarios.filter(scenario => !added.includes(scenario)).flatMap(scenario => scenario.keys));
+        const keys = new Set(added.flatMap(scenario => scenario.keys));
+        expect(added).toHaveLength(11);
+        expect([...keys].filter(key => !existing.has(key))).toHaveLength(50);
+        for (const kind of ['instances', 'tls-certificates', 'uptime-populated']) {
+            const kindKeys = new Set(added.filter(scenario => scenario.kind === kind).flatMap(scenario => scenario.keys));
+            expect(kindKeys.size).toBe(kind === 'instances' ? 30 : 10);
+        }
+        for (const profileId of new Set(added.map(scenario => scenario.profile))) {
+            const profile = capture.scenarios.find(scenario => scenario.id === profileId);
+            expect(profile.requests.every(record => record.request.method === 'GET')).toBe(true);
+        }
+        expect(keys.has('instances.added')).toBe(false);
+        expect(keys.has('instances.discoveredContainers')).toBe(false);
+        expect(keys.has('tls.daysShort')).toBe(false);
+        expect(keys.has('uptime.online')).toBe(false);
+    });
+
 });

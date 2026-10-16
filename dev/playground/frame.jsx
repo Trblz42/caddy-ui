@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
+import { EditorView } from '@codemirror/view';
 import { MemoryRouter } from 'react-router-dom';
 import { I18nextProvider } from 'react-i18next';
 import i18n from '../../src/frontend/src/i18n/index.js';
@@ -14,6 +15,7 @@ const modules = import.meta.glob('../../src/frontend/src/i18n/locales/*.js', { e
 const catalogs = Object.fromEntries(Object.entries(modules).map(([path, catalog]) => [path.split('/').pop().slice(0, -3), catalog]));
 const element = document.getElementById('root');
 const root = createRoot(element, { onUncaughtError: error => send({ type: 'preview-error', message: error.message }) });
+const realNow = Date.now;
 const observations = new Map();
 const misses = new Set();
 let config;
@@ -50,6 +52,7 @@ for (const name of ['localStorage', 'sessionStorage']) {
 
 function miss(message) { misses.add(message); scheduleReport(); }
 window.fetch = createReplayFetch([], miss, location.origin);
+window.open = url => { miss(`Unrecorded window: ${String(url)}`); return null; };
 for (const name of ['XMLHttpRequest', 'EventSource']) {
     window[name] = class { constructor() { miss(`Unrecorded transport: ${name}`); throw new Error(`Unrecorded transport: ${name}`); } };
 }
@@ -86,12 +89,30 @@ function scheduleReport() {
         } else if (setupStep === 1 && scenario.setup === 'label-saved') {
             const save = element.querySelector('.modal .btn-primary');
             if (save) { setupStep = 2; save.click(); }
+        } else if (!setupStep && scenario.setup === 'route-add') {
+            const add = element.querySelector('.routes-toolbar-actions > .btn-primary');
+            if (add) { setupStep = 1; add.click(); }
+        } else if (!setupStep && scenario.setup === 'route-columns') {
+            const trigger = element.querySelector('.col-picker-trigger');
+            if (trigger) { setupStep = 1; trigger.click(); }
+        } else if (setupStep === 1 && scenario.setup === 'route-columns') {
+            const id = element.querySelector('.col-picker-item:last-of-type input');
+            if (id) { setupStep = 2; id.click(); }
+        } else if (!setupStep && scenario.setup === 'tls-filter') {
+            const card = element.querySelectorAll('.grid-4 .card-clickable')[scenario.filterIndex];
+            if (card) { setupStep = 1; card.click(); }
         } else if (!setupStep && scenario.setup === 'welcome-light') {
             const light = element.querySelector('.modal .btn-ghost');
             if (light) { setupStep = 1; light.click(); }
         } else if (!setupStep && scenario.setup === 'theme-menu') {
             const trigger = element.querySelector('button.theme-picker-trigger');
             if (trigger) { setupStep = 1; trigger.click(); }
+        } else if (!setupStep && ['observability-config', 'logs-enabled'].includes(scenario.setup)) {
+            const header = element.querySelector('.card-header--clickable');
+            if (header) { setupStep = 1; header.click(); }
+        } else if (setupStep === 1 && scenario.setup === 'logs-enabled') {
+            const toggle = element.querySelector('.log-enabled-btn');
+            if (toggle) { setupStep = 2; toggle.click(); }
         } else if (!setupStep && scenario.kind === 'notification-settings') {
             const provider = element.querySelector('select.config-select');
             const toggle = element.querySelector('.notifications-enabled-btn');
@@ -102,6 +123,67 @@ function scheduleReport() {
                 provider.value = scenario.provider;
                 provider.dispatchEvent(new Event('change', { bubbles: true }));
                 if (scenario.enabled) toggle.click();
+            }
+        }
+        if (!setupStep && scenario.setup === 'tls-orphaned') {
+            const orphaned = element.querySelector('.card-header .btn-row > .section-label');
+            if (orphaned) { setupStep = 1; orphaned.click(); }
+        }
+        if (scenario.kind === 'instances') {
+            if (!setupStep && ['instance-add', 'instance-invalid', 'instance-edit', 'instance-remove', 'instance-discover'].includes(scenario.setup)) {
+                const header = element.querySelector('.gap-16 > .card:first-child');
+                const instance = element.querySelector('.instance-details-grid')?.closest('.card');
+                const action = scenario.setup === 'instance-edit' ? instance?.querySelector('.btn-ghost')
+                    : scenario.setup === 'instance-remove' ? instance?.querySelector('.btn-danger')
+                        : scenario.setup === 'instance-discover' ? header?.querySelector('.btn-ghost') : header?.querySelector('.btn-primary');
+                if (action) { setupStep = 1; action.click(); }
+            } else if (setupStep === 1 && scenario.setup === 'instance-invalid') {
+                const save = element.querySelector('.modal .btn-primary');
+                if (save) { setupStep = 2; save.click(); }
+            }
+        }
+        if (!setupStep && scenario.setup === 'route-edit') {
+            const edit = element.querySelector('.col-actions button[title]:last-of-type');
+            if (edit) { setupStep = 1; edit.click(); }
+        }
+        if (scenario.kind === 'caddyfile') {
+            const buttons = [...element.querySelectorAll('.editor-toolbar-actions > button')];
+            const historySetups = ['caddyfile-history', 'caddyfile-list', 'caddyfile-diff', 'caddyfile-raw', 'caddyfile-restore', 'caddyfile-delete'];
+            if (!setupStep && historySetups.includes(scenario.setup) && buttons[1]) { setupStep = 1; buttons[1].click(); }
+            else if (setupStep === 1 && ['caddyfile-list', 'caddyfile-diff'].includes(scenario.setup)) {
+                const list = element.querySelector('[aria-controls="history-version-list"]');
+                if (list) { setupStep = 2; list.click(); }
+            } else if (setupStep === 2 && scenario.setup === 'caddyfile-diff') {
+                const entries = element.querySelectorAll('.history-entry');
+                if (entries.length >= 2) { setupStep = 3; entries[entries.length - 1].click(); }
+            } else if (setupStep === 1 && scenario.setup === 'caddyfile-raw') {
+                const raw = element.querySelector('.history-range-picker button:last-child');
+                if (raw) { setupStep = 2; raw.click(); }
+            } else if (setupStep === 1 && ['caddyfile-restore', 'caddyfile-delete'].includes(scenario.setup)) {
+                const action = element.querySelectorAll('.history-version-actions button')[scenario.setup === 'caddyfile-restore' ? 0 : 1];
+                if (action && !action.disabled) { setupStep = 2; action.click(); }
+            } else if (!setupStep && scenario.setup === 'caddyfile-force') {
+                const editor = element.querySelector('.cm-content');
+                if (editor) {
+                    setupStep = 1;
+                    // Use the production editor's transaction/update listener;
+                    // leave focus in the contributor's translation input.
+                    const view = EditorView.findFromDOM(editor);
+                    view.dispatch({ changes: { from: view.state.doc.length, insert: '\n# Local playground edit\n' } });
+                }
+            } else if (setupStep === 1 && scenario.setup === 'caddyfile-force' && buttons[5] && !buttons[5].disabled) {
+                setupStep = 2; buttons[5].click();
+            } else if (!setupStep && scenario.setup === 'caddyfile-import') {
+                const input = element.querySelector('input[type="file"]');
+                if (input) {
+                    setupStep = 1;
+                    const data = new DataTransfer();
+                    data.items.add(new File(['# Local playground import\n'], 'Caddyfile', { type: 'text/plain' }));
+                    input.files = data.files;
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            } else if (!setupStep && scenario.setup === 'caddyfile-valid' && buttons[0]) {
+                setupStep = 1; buttons[0].click();
             }
         }
         const records = [...observations.values()];
@@ -122,7 +204,7 @@ function scheduleReport() {
 
 const mutations = new MutationObserver(scheduleReport);
 mutations.observe(element, { subtree: true, childList: true, characterData: true,
-    attributes: true, attributeFilter: ['title', 'placeholder', 'aria-label'] });
+    attributes: true, attributeFilter: ['title', 'placeholder', 'aria-label', 'aria-valuetext'] });
 const sizes = new ResizeObserver(scheduleReport);
 sizes.observe(element);
 
@@ -132,6 +214,10 @@ async function configurePreview(event) {
     const next = event.data.config;
     const scenario = scenarios.find(scenario => scenario.id === next?.scenario);
     if (!scenario || !Object.hasOwn(catalogs, next.locale) || typeof readValue(catalogs.en, next.selected) !== 'string') return;
+    const profile = capture.scenarios.find(profile => profile.id === scenario.profile);
+    // History queries contain an exact since=<epoch>. Replay its observed clock
+    // so production range controls keep using the captured request URLs.
+    Date.now = profile?.clock === undefined ? realNow : () => profile.clock;
     const currentRevision = ++revision;
     config = next;
     const translationKey = JSON.stringify([next.locale, next.overrides]);
@@ -142,7 +228,6 @@ async function configurePreview(event) {
         ? JSON.stringify([scenario.id, next.locale, next.overrides]) : scenario.id;
     if (configuredState !== stateKey) {
         misses.clear(); observations.clear(); setupStep = 0;
-        const profile = capture.scenarios.find(profile => profile.id === scenario.profile);
         window.fetch = createReplayFetch(profile?.requests || [], miss, location.origin);
         configuredState = stateKey;
     }
@@ -159,7 +244,7 @@ async function configurePreview(event) {
     if (disposed || currentRevision !== revision) return;
     document.documentElement.lang = next.locale;
     document.body.dataset.previewKind = scenario.kind;
-    flushSync(() => root.render(<MemoryRouter key={stateKey} initialEntries={['/dashboard']}>
+    flushSync(() => root.render(<MemoryRouter key={stateKey} initialEntries={[scenario.path || '/dashboard']}>
         <I18nextProvider i18n={i18n}><FixtureView scenario={scenario} /></I18nextProvider>
     </MemoryRouter>));
     scheduleReport();
@@ -170,6 +255,7 @@ import.meta.hot?.dispose(() => {
     mutations.disconnect(); sizes.disconnect();
     window.removeEventListener('message', configurePreview);
     root.unmount(); style.remove();
+    Date.now = realNow;
     if (HTMLElement.prototype.focus === previewFocus) HTMLElement.prototype.focus = focus;
     // Keep virtual storage/replay in place until the next module initializes.
 });
