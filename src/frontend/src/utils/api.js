@@ -12,17 +12,42 @@ export class ApiError extends Error {
     }
 }
 
-export function getToken() { return localStorage.getItem('caddy_ui_token'); }
-export function setToken(token) {
-    if (token) localStorage.setItem('caddy_ui_token', token);
-    else localStorage.removeItem('caddy_ui_token');
+let csrfRequest;
+export function resetAuthContext() {
+    csrfRequest = undefined;
+    // Remove credentials left by versions that used browser storage.
+    localStorage.removeItem('caddy_ui_token');
+    localStorage.removeItem('caddy_ui_auth_enabled');
 }
 
-export function getAuthEnabled() {
-    const v = localStorage.getItem('caddy_ui_auth_enabled');
-    return v === null ? null : v === 'true';
+async function csrfToken() {
+    if (!csrfRequest) {
+        csrfRequest = fetch(`${API}/auth/csrf`, { credentials: 'same-origin', cache: 'no-store' })
+            .then(async response => {
+                const body = await response.json();
+                if (!response.ok || typeof body.csrfToken !== 'string') throw new ApiError('Cannot establish request context', { code: 'CSRF_INVALID' });
+                return body.csrfToken;
+            }).catch(error => {
+                csrfRequest = undefined;
+                if (error instanceof ApiError) throw error;
+                throw new ApiError('Network connection failed', { code: 'NETWORK_ERROR' });
+            });
+    }
+    return csrfRequest;
 }
-export function setAuthEnabled(v) { localStorage.setItem('caddy_ui_auth_enabled', String(v)); }
+
+export async function authRequest(path, opts = {}) {
+    try { return await apiFetch('/auth' + path, opts); }
+    finally { csrfRequest = undefined; }
+}
+
+export async function fetchAuthStatus() {
+    const state = await apiFetch('/auth/status', { cache: 'no-store' });
+    if (typeof state?.authEnabled !== 'boolean' || typeof state?.authenticated !== 'boolean') {
+        throw new ApiError('Invalid authentication response', { code: 'INVALID_LOCAL_STATE' });
+    }
+    return state;
+}
 
 export async function fetchSettings(onUnauth) {
     return apiFetch('/settings', {}, onUnauth);
@@ -57,14 +82,16 @@ export function clearInstanceId() {
 }
 
 export async function apiFetch(path, opts = {}, onUnauth) {
-    const token = getToken();
     const headers = { ...(opts.headers || {}) };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    // Capture the intended instance before asynchronous CSRF preparation.
     const instanceId = getInstanceId();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes((opts.method || 'GET').toUpperCase())) {
+        headers['X-CSRF-Token'] = await csrfToken();
+    }
     headers['X-Instance-Id'] = instanceId;
     let res;
     try {
-        res = await fetch(`${API}${path}`, { ...opts, headers });
+        res = await fetch(`${API}${path}`, { ...opts, credentials: 'same-origin', headers });
     } catch (cause) {
         // No server received this request; keep browser-only details in console.
         console.error('API connection failed', { path, cause });
@@ -78,10 +105,11 @@ export async function apiFetch(path, opts = {}, onUnauth) {
         body = null;
     }
     if (res.status === 401) {
-        setToken(null);
+        resetAuthContext();
         if (onUnauth) onUnauth();
     }
     if (!res.ok) {
+        if (body?.code === 'CSRF_INVALID') csrfRequest = undefined;
         const payload = body && typeof body === 'object' ? body : {};
         // Never retried: the request may be a write meant for the missing instance.
         // Skip the reset if the user already switched while this was in flight.

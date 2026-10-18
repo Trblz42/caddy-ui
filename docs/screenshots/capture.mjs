@@ -56,10 +56,12 @@ export async function captureScreenshots({ output = resolve(import.meta.dirname,
     process.once('SIGINT', interrupt);
     process.once('SIGTERM', interrupt);
 
-    function api(path, method = 'GET', body = null) {
+    const requestContexts = new Map();
+    async function api(path, method = 'GET', body = null) {
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !requestContexts.get(socketPath)?.['X-CSRF-Token']) await api('/auth/csrf');
         return new Promise((resolve, reject) => {
             const call = request({ socketPath, path: '/api' + path, method, timeout: 5000, signal: startup.signal,
-                headers: { 'Content-Type': 'application/json', 'X-Instance-Id': 'default' } }, response => {
+                headers: { ...requestContexts.get(socketPath), 'Content-Type': 'application/json', 'X-Instance-Id': 'default' } }, response => {
                 const chunks = [];
                 response.on('data', chunk => chunks.push(chunk));
                 response.on('error', reject);
@@ -67,6 +69,11 @@ export async function captureScreenshots({ output = resolve(import.meta.dirname,
                     try {
                         const text = Buffer.concat(chunks).toString();
                         const headers = Object.fromEntries(['content-type', 'x-request-id'].filter(key => response.headers[key]).map(key => [key, response.headers[key]]));
+                        const cookie = response.headers['set-cookie']?.at(-1);
+                        if (cookie) requestContexts.set(socketPath, { Cookie: cookie.split(';')[0] });
+                        if (path === '/auth/csrf') requestContexts.set(socketPath, {
+                            ...requestContexts.get(socketPath), 'X-CSRF-Token': JSON.parse(text).csrfToken,
+                        });
                         resolve({ request: { method, path, body }, response: {
                             status: response.statusCode, headers,
                             body: headers['content-type']?.includes('application/json') ? JSON.parse(text) : text,
@@ -115,6 +122,8 @@ export async function captureScreenshots({ output = resolve(import.meta.dirname,
         startup.signal.throwIfAborted();
         if (!ready) throw new Error(`Capture backend did not become ready.\n${outputLog}`);
 
+        await successful('/auth/setup', 'POST', { username: 'capture-administrator', password: randomBytes(24).toString('base64url') });
+
         // Enrich state: enable metrics, set server label, add route note.
         await successful('/metrics/config', 'PUT', { enabled: true });
         await successful('/server-names/srv0', 'PUT', { name: 'Production HTTPS' });
@@ -155,7 +164,7 @@ export async function captureScreenshots({ output = resolve(import.meta.dirname,
         requests.push(await api('/custom-themes'));
         requests.push(await api('/version'));
         requests.push(await api('/instances'));
-        const authCheck = await api('/auth/check');
+        const authCheck = await api('/auth/status');
         requests.push(authCheck);
 
         // Dashboard.

@@ -1700,12 +1700,18 @@ export const css = `
   .metrics-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
   .metrics-bar-count { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text); width: 40px; text-align: right; flex-shrink: 0; }
 
+  .auth-help { color: var(--muted); font-size: 12px; line-height: 1.6; margin-bottom: 16px; }
+  .auth-ack { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.6; margin: 16px 0; }
+  .auth-recovery-key { width: 100%; font-family: 'IBM Plex Mono', monospace; overflow-wrap: anywhere; resize: vertical; }
+  .login-card > .btn + .btn { margin-top: 12px; }
   .login-shell {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     height: 100vh;
     height: 100dvh;
+    overflow-y: auto;
+    padding: 16px 0;
     background: var(--bg);
   }
 
@@ -1716,6 +1722,8 @@ export const css = `
     padding: 40px;
     width: 360px;
     max-width: calc(100vw - 32px);
+    margin-block: auto;
+    flex-shrink: 0;
   }
 
   .login-logo {
