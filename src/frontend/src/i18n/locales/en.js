@@ -66,6 +66,7 @@ export default {
         caddyfileRollbackFailed: 'Caddy rejected the change and the previous Caddyfile could not be restored. The file on disk does not match what Caddy is running.',
         caddyfileHistoryReadFailed: 'Could not read the Caddyfile history.',
         routeNotesReadFailed: 'Could not read route notes. Saved notes were left unchanged.',
+        routeNotesSaveFailed: 'Could not save the route note.',
         caddyReloadFailed: 'Could not reload Caddy.',
         instanceNotFound: 'The instance was not found.',
         instanceSelectionInvalid: 'The selected instance no longer exists. Switched to an available instance.',
