@@ -14,6 +14,10 @@ const debounceMap = new Map(); // key -> last alert timestamp
 
 export function updateMonitorConfig(newConfig) {
     config = newConfig;
+    for (const [stateKey, pending] of pendingRetries) {
+        const trigger = pending.type === 'offline' ? 'upstreamOffline' : 'upstreamOnline';
+        if (!config.enabled || !config.triggers[trigger]) cancelPendingRetry(stateKey);
+    }
     if (config.enabled && !checkTimer) {
         startMonitor();
     } else if (!config.enabled && checkTimer) {
@@ -32,6 +36,7 @@ function stopMonitor() {
         clearInterval(checkTimer);
         checkTimer = null;
     }
+    cancelAllPendingRetries();
     logger.info('Notification monitor stopped');
 }
 
@@ -120,25 +125,117 @@ export async function notifyExpiringApiTokens(tokens, now = Date.now()) {
 }
 
 // Track previous upstream state to detect transitions
-const upstreamState = new Map(); // upstream -> boolean (online)
+const upstreamState = new Map(); // stateKey -> boolean (online)
 
-// Prefixes a notification message with the instance name, but only when there's
-// more than one instance configured -- no point labeling in the common case.
+// One record owns all attempts; deleting it invalidates in-flight completions too.
+const pendingRetries = new Map();
+
+// Upstreams whose offline alert was successfully delivered, so recovery
+// alerts are only sent when the user was actually told it went down.
+const deliveredOffline = new Set();
+
+const RETRY_DELAYS_MS = [30_000, 60_000];
+const MAX_UPSTREAM_ATTEMPTS = 3;
+
 function instanceLabel(inst) {
     return getInstances().length > 1 ? `[${inst.name}] ` : '';
+}
+
+function cancelPendingRetry(stateKey) {
+    const pending = pendingRetries.get(stateKey);
+    if (pending) {
+        clearTimeout(pending.timer);
+        pendingRetries.delete(stateKey);
+    }
+}
+
+export function cancelAllPendingRetries() {
+    for (const [, pending] of pendingRetries) clearTimeout(pending.timer);
+    pendingRetries.clear();
+}
+
+function queueUpstreamAlert(stateKey, type, alert) {
+    const pending = { type, alert, attempt: 1, timer: null };
+    pendingRetries.set(stateKey, pending);
+    return attemptUpstreamAlert(stateKey, pending);
+}
+
+async function attemptUpstreamAlert(stateKey, pending) {
+    if (pendingRetries.get(stateKey) !== pending) return;
+    const { type, alert, attempt } = pending;
+    const trigger = type === 'offline' ? 'upstreamOffline' : 'upstreamOnline';
+    if (!config?.enabled || !config.triggers[trigger] || upstreamState.get(stateKey) !== (type === 'online')) {
+        cancelPendingRetry(stateKey);
+        return;
+    }
+
+    if (attempt > 1) {
+        const instId = stateKey.split(':')[0];
+        if (!getInstances().some(i => i.id === instId)) { forgetUpstream(stateKey); return; }
+    }
+
+    pending.timer = null;
+    try {
+        await sendNotification(config, alert);
+        if (pendingRetries.get(stateKey) !== pending) return;
+        pendingRetries.delete(stateKey);
+        markSent(`${type}:${stateKey}`);
+        if (type === 'offline') deliveredOffline.add(stateKey);
+        else deliveredOffline.delete(stateKey);
+    } catch (err) {
+        if (pendingRetries.get(stateKey) !== pending) return;
+        if (attempt < MAX_UPSTREAM_ATTEMPTS) {
+            const delay = RETRY_DELAYS_MS[attempt - 1];
+            logger.warn('Upstream notification delivery failed, scheduling retry', {
+                stateKey, type, attempt, nextIn: `${delay / 1000}s`, error: err.message,
+            });
+            pending.attempt = attempt + 1;
+            pending.timer = setTimeout(() => void attemptUpstreamAlert(stateKey, pending), delay);
+            pending.timer.unref?.();
+        } else {
+            pendingRetries.delete(stateKey);
+            logger.error('Upstream notification delivery failed after max retries', {
+                stateKey, type, attempts: MAX_UPSTREAM_ATTEMPTS, error: err.message,
+            });
+        }
+    }
+}
+
+function forgetUpstream(stateKey) {
+    cancelPendingRetry(stateKey);
+    upstreamState.delete(stateKey);
+    deliveredOffline.delete(stateKey);
+    debounceMap.delete(`offline:${stateKey}`);
+    debounceMap.delete(`online:${stateKey}`);
+}
+
+// Removal must clean up even if this was the last instance being monitored.
+export function releaseInstanceNotifications(instanceId) {
+    for (const stateKey of upstreamState.keys()) {
+        if (stateKey.startsWith(`${instanceId}:`)) forgetUpstream(stateKey);
+    }
 }
 
 // Fed by the upstream monitor after each round rather than by probes of our
 // own, like notifyRouteChecks. State is tracked while notifications are off
 // too, so turning them on compares against the current state, not a stale one.
 export async function notifyUpstreamChecks(inst, checks) {
+    const seen = new Set();
     const changes = [];
     for (const check of checks) {
         const stateKey = `${inst.id}:${check.upstream}`;
+        seen.add(stateKey);
         const prev = upstreamState.get(stateKey);
         upstreamState.set(stateKey, check.online);
         if (prev !== undefined && prev !== check.online) changes.push(check);
     }
+
+    // Removed upstreams must not carry delivery history into a fresh baseline.
+    for (const key of upstreamState.keys()) {
+        if (key.startsWith(`${inst.id}:`) && !seen.has(key)) forgetUpstream(key);
+    }
+
+    for (const check of changes) cancelPendingRetry(`${inst.id}:${check.upstream}`);
     if (!config?.enabled) return;
 
     const instLabel = instanceLabel(inst);
@@ -146,36 +243,21 @@ export async function notifyUpstreamChecks(inst, checks) {
         const stateKey = `${inst.id}:${check.upstream}`;
         const label = check.domain ? `${instLabel}${check.domain} (${check.upstream})` : `${instLabel}${check.upstream}`;
 
-        try {
-            if (!check.online && config.triggers.upstreamOffline) {
-                const key = `offline:${stateKey}`;
-                if (!isDebouncedKey(key)) {
-                    markSent(key);
-                    await sendNotification(config, {
-                        title: 'Upstream offline',
-                        message: `${label} is unreachable`,
-                        priority: 'high',
-                    });
-                }
+        if (!check.online && config.triggers.upstreamOffline) {
+            const key = `offline:${stateKey}`;
+            if (!isDebouncedKey(key)) {
+                const alert = { title: 'Upstream offline', message: `${label} is unreachable`, priority: 'high' };
+                await queueUpstreamAlert(stateKey, 'offline', alert);
             }
+        }
 
-            if (check.online && config.triggers.upstreamOnline) {
-                const key = `online:${stateKey}`;
-                if (!isDebouncedKey(key)) {
-                    markSent(key);
-                    await sendNotification(config, {
-                        title: 'Upstream recovered',
-                        message: `${label} is back online`,
-                        priority: 'default',
-                    });
-                }
+        if (check.online && config.triggers.upstreamOnline) {
+            if (!deliveredOffline.has(stateKey)) continue;
+            const key = `online:${stateKey}`;
+            if (!isDebouncedKey(key)) {
+                const alert = { title: 'Upstream recovered', message: `${label} is back online`, priority: 'default' };
+                await queueUpstreamAlert(stateKey, 'online', alert);
             }
-        } catch (err) {
-            logger.warn('Upstream notification failed', {
-                instance: inst.name,
-                upstream: check.upstream,
-                error: err.message,
-            });
         }
     }
 }
@@ -394,3 +476,5 @@ export async function initMonitor({ apiTokens } = {}) {
         logger.warn('Could not load notification config on startup', { error: err.message });
     }
 }
+
+export const _test = { pendingRetries, deliveredOffline, upstreamState };
