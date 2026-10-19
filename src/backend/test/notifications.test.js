@@ -187,6 +187,74 @@ describe('routeTransitions', () => {
     });
 });
 
+describe('notifyUpstreamChecks', () => {
+    const inst = { id: 'a', name: 'Alpha' };
+    const check = (upstream, online) => ({ domain: 'app.example.com', upstream, online });
+    const config = enabled => ({
+        enabled, provider: 'ntfy', ntfy: { url: 'http://ntfy/caddy-alerts' }, debounceMinutes: 30,
+        triggers: { upstreamOffline: true, upstreamOnline: true, certExpiring: false, updateAvailable: false },
+    });
+
+    async function load() {
+        vi.resetModules();
+        return import('../src/notifications.js');
+    }
+
+    beforeEach(() => {
+        sendWebhook.mockReset().mockResolvedValue(undefined);
+    });
+
+    it('alerts on transitions in the monitor rounds it is given, not on the first', async () => {
+        const { notifyUpstreamChecks, updateMonitorConfig } = await load();
+        updateMonitorConfig(config(true));
+        try {
+            await notifyUpstreamChecks(inst, [check('app:3000', true)]);
+            expect(sendWebhook).not.toHaveBeenCalled();
+            await notifyUpstreamChecks(inst, [check('app:3000', false)]);
+            expect(sendWebhook).toHaveBeenCalledTimes(1);
+            expect(sendWebhook.mock.calls[0][1].headers.Title).toBe('Upstream offline');
+        } finally {
+            updateMonitorConfig(config(false));
+        }
+    });
+
+    it.each([
+        { initial: true, title: 'Upstream offline' },
+        { initial: false, title: 'Upstream recovered' },
+    ])('continues sending $title alerts after one delivery fails', async ({ initial, title }) => {
+        const { notifyUpstreamChecks, updateMonitorConfig } = await load();
+        updateMonitorConfig(config(true));
+        try {
+            await notifyUpstreamChecks(inst, [check('first:3000', initial), check('second:3000', initial)]);
+            sendWebhook.mockRejectedValueOnce(new Error('ntfy responded 500'));
+            const changed = [check('first:3000', !initial), check('second:3000', !initial)];
+
+            await expect(notifyUpstreamChecks(inst, changed)).resolves.toBeUndefined();
+            expect(sendWebhook).toHaveBeenCalledTimes(2);
+            expect(sendWebhook.mock.calls[1][1].headers.Title).toBe(title);
+            expect(sendWebhook.mock.calls[1][1].body).toContain('second:3000');
+
+            await notifyUpstreamChecks(inst, changed);
+            expect(sendWebhook).toHaveBeenCalledTimes(2);
+        } finally {
+            updateMonitorConfig(config(false));
+        }
+    });
+
+    it('tracks state while off, so turning alerts on does not report an old transition', async () => {
+        const { notifyUpstreamChecks, updateMonitorConfig } = await load();
+        await notifyUpstreamChecks(inst, [check('app:3000', true)]);
+        await notifyUpstreamChecks(inst, [check('app:3000', false)]);
+        updateMonitorConfig(config(true));
+        try {
+            await notifyUpstreamChecks(inst, [check('app:3000', false)]);
+            expect(sendWebhook).not.toHaveBeenCalled();
+        } finally {
+            updateMonitorConfig(config(false));
+        }
+    });
+});
+
 describe('notifyExpiringApiTokens', () => {
     const DAY = 86_400_000;
     const now = Date.parse('2026-10-18T12:00:00Z');
