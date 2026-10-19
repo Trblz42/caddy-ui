@@ -23,8 +23,8 @@ export function updateMonitorConfig(newConfig) {
 
 function startMonitor() {
     logger.info('Notification monitor started');
-    checkTimer = setInterval(runChecks, CHECK_INTERVAL_MS);
-    runChecks();
+    checkTimer = setInterval(runNotificationCycle, CHECK_INTERVAL_MS);
+    runNotificationCycle();
 }
 
 function stopMonitor() {
@@ -46,23 +46,28 @@ function markSent(key) {
     debounceMap.set(key, Date.now());
 }
 
-async function runChecks() {
+async function runNotificationCycle() {
     if (!config?.enabled) return;
 
-    try {
-        if (config.triggers.certExpiring) {
-            await checkCerts();
+    const categories = [];
+    if (config.triggers.certExpiring) {
+        categories.push({ category: 'certificates', check: checkCerts });
+    }
+    if (config.triggers.updateAvailable !== false) {
+        categories.push({ category: 'updates', check: checkForUpdate });
+    }
+    if (config.triggers.apiTokenExpiring !== false) {
+        categories.push({ category: 'api-tokens', check: () => notifyExpiringApiTokens(listApiTokens()) });
+    }
+
+    const results = await Promise.allSettled(categories.map(c => c.check()));
+    for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'rejected') {
+            logger.error('Notification monitor check failed', {
+                category: categories[i].category,
+                error: results[i].reason?.message ?? String(results[i].reason),
+            });
         }
-        // Missing from configs saved before this trigger existed; on by default
-        if (config.triggers.updateAvailable !== false) {
-            await checkForUpdate();
-        }
-        // Also newer than some saved configs, so also on by default
-        if (config.triggers.apiTokenExpiring !== false) {
-            await notifyExpiringApiTokens(listApiTokens());
-        }
-    } catch (err) {
-        logger.error('Notification monitor check failed', { error: err.message });
     }
 }
 
