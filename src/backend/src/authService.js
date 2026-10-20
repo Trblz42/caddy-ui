@@ -5,6 +5,8 @@ import { createAuthSessions } from './authSessions.js';
 import { API_TOKEN_SCOPES, MAX_API_TOKENS, validApiTokenInput } from './apiTokenPolicy.js';
 import { getInstances } from './instances.js';
 import logger from './logger.js';
+import { createPasskeyService } from './passkeys.js';
+import { PasskeyValidationError } from './passkeyPolicy.js';
 
 function sameSecret(actual, expected) {
     if (typeof actual !== 'string') return false;
@@ -12,7 +14,7 @@ function sameSecret(actual, expected) {
     return timingSafeEqual(hash(actual), hash(expected));
 }
 
-export async function createAuthService({ store = createAuthStore(), env = process.env, sessions } = {}) {
+export async function createAuthService({ store = createAuthStore(), env = process.env, sessions, now = Date.now } = {}) {
     await store.loadAuth();
     let legacy = null;
     if (!store.isInitialized()) {
@@ -37,11 +39,20 @@ export async function createAuthService({ store = createAuthStore(), env = proce
     }
     async function persist(operation) {
         try { return await operation(); }
-        catch (cause) { throw new AppError('AUTH_PERSISTENCE_FAILED', { cause }); }
+        catch (cause) {
+            throw new AppError(cause instanceof PasskeyValidationError ? 'PASSKEY_INVALID' : 'AUTH_PERSISTENCE_FAILED', { cause });
+        }
     }
+    function requireManagement(req, res) {
+        const session = sessions.readSession(req);
+        if (session?.permission !== 'management') throw new AppError('UNAUTHORIZED');
+        return sessions.watchSession(session, res);
+    }
+    const passkeys = createPasskeyService({ store, sessions, env, serialize, persist, requireManagement, now });
 
     return {
         sessions,
+        passkeys,
         verifyApiToken(token) { return store.verifyApiToken(token); },
         // Token metadata for background monitors, which have no request to authorize.
         apiTokenMetadata() { return store.listApiTokens(); },
@@ -103,13 +114,10 @@ export async function createAuthService({ store = createAuthStore(), env = proce
                 enrollmentRequired: !store.isInitialized() && legacy !== null,
                 enrollmentAuthenticated: session?.permission === 'enrollment',
                 publicMetrics: env.CADDY_UI_PUBLIC_METRICS === 'true',
+                ...passkeys.state(),
             };
         },
-        requireManagement(req, res) {
-            const session = sessions.readSession(req);
-            if (session?.permission !== 'management') throw new AppError('UNAUTHORIZED');
-            return sessions.watchSession(session, res);
-        },
+        requireManagement,
         login(req, res, { username, password } = {}) {
             return serialize(async () => {
                 let permission;
