@@ -14,6 +14,12 @@ interface. Your Caddyfile remains the source of truth.
   saved versions.
 - **Route manager**
   Find routes across HTTP servers, edit upstreams, and keep notes alongside them.
+  Routes without an explicit title display the first hostname's leftmost DNS
+  label in italics (for example, `jellyfin.example.de` becomes *jellyfin*).
+  Clearing a custom title restores this default. Uptime labels use the same
+  fallback; status history headings keep the full domain unless an explicit
+  title exists. The fallback is display-only and does not change notes or the
+  Caddyfile; wildcard, IP, placeholder and hostless routes stay untitled.
 - **Configuration workflow**
   Import or export a Caddyfile and reload Caddy from the UI.
 

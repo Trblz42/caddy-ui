@@ -2109,6 +2109,7 @@ export const css = `
     display: none;
   }
   .col-title { font-size: 12px; }
+  .route-title--fallback { font-style: italic; }
 
   .route-domain-cell { display: flex; align-items: center; gap: 8px; }
 
