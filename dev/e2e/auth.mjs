@@ -93,12 +93,26 @@ test('Security sections update credentials on HTTP and preserve the current brow
     const dialog = page.getByRole('dialog', { name: 'Security', exact: true });
     const user = dialog.getByRole('button', { name: 'User', exact: true });
     const tokens = dialog.getByRole('button', { name: 'API tokens', exact: true });
-    assert.equal(await user.getAttribute('aria-expanded'), 'true');
-    assert.equal(await tokens.getAttribute('aria-expanded'), 'false');
-    await dialog.getByRole('button', { name: 'Auth', exact: true }).click();
+    const auth = dialog.getByRole('button', { name: 'Auth', exact: true });
+    for (const section of [user, auth, tokens]) assert.equal(await section.getAttribute('aria-expanded'), 'false');
+    await auth.click();
+    const totp = dialog.getByRole('button', { name: 'Authenticator app (TOTP)', exact: true });
+    const passkeys = dialog.getByRole('button', { name: 'Passkeys', exact: true });
+    for (const section of [totp, passkeys]) assert.equal(await section.getAttribute('aria-expanded'), 'false');
+    assert.equal(await dialog.getByRole('button', { name: 'Set up authenticator', exact: true }).count(), 0);
+    await totp.press('Enter');
+    await dialog.getByRole('button', { name: 'Set up authenticator', exact: true }).waitFor();
+    await passkeys.press('Enter');
     await dialog.getByText('Passkeys need HTTPS.', { exact: false }).waitFor();
     assert.equal(await dialog.getByRole('button', { name: 'Add passkey', exact: true }).isDisabled(), true);
-    await dialog.getByRole('button', { name: 'Auth', exact: true }).click();
+    const top = await dialog.locator('.security-subsection').first().boundingBox();
+    const bottom = await dialog.locator('.security-subsection').last().boundingBox();
+    assert(bottom.y - (top.y + top.height) >= 16, 'authentication sections have visible spacing');
+    await auth.click();
+    await auth.click();
+    for (const section of [totp, passkeys]) assert.equal(await section.getAttribute('aria-expanded'), 'false');
+    await auth.click();
+    await user.press('Enter');
     assert.equal(await dialog.getByLabel('Username', { exact: true }).inputValue(), 'administrator');
     await user.press('Enter');
     assert.equal(await dialog.getByLabel('Username', { exact: true }).isVisible(), false);
@@ -125,6 +139,8 @@ test('Security sections update credentials on HTTP and preserve the current brow
     await page.reload();
     await page.locator('.shell').waitFor();
     await page.getByRole('button', { name: 'Security', exact: true }).click();
+    assert.equal(await user.getAttribute('aria-expanded'), 'false');
+    await user.click();
     assert.equal(await dialog.getByLabel('Username', { exact: true }).inputValue(), 'renamed-admin');
     const replacement = secret();
     await dialog.getByLabel('Current password', { exact: true }).fill(password);
@@ -178,8 +194,8 @@ test('backend failure presents a retry screen instead of entering the applicatio
 async function openPasskeys(page) {
     await page.getByRole('button', { name: 'Security', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Security', exact: true });
-    await dialog.getByRole('button', { name: 'User', exact: true }).click();
     await dialog.getByRole('button', { name: 'Auth', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Passkeys', exact: true }).click();
     await dialog.getByText('No passkeys have been added.').or(dialog.getByRole('button', { name: /^Remove / })).first().waitFor();
     return dialog;
 }
@@ -194,8 +210,15 @@ async function virtualAuthenticator(context, page) {
     return { cdp, authenticatorId };
 }
 
+async function choosePassword(dialog, passwordId) {
+    // The password input is hidden when passkey verification is preferred.
+    const radio = dialog.locator(`input[type="radio"][name="${passwordId}"]`).last();
+    if (await radio.count()) await radio.check();
+}
+
 async function addPasskey(dialog, password, name) {
     await dialog.getByLabel('Passkey name', { exact: true }).fill(name);
+    await choosePassword(dialog, 'passkey-password');
     await dialog.getByLabel('Confirm your password', { exact: true }).fill(password);
     await dialog.getByRole('button', { name: 'Add passkey', exact: true }).click();
     await dialog.getByRole('status').filter({ hasText: 'Passkey added.' }).waitFor();
@@ -210,6 +233,7 @@ test('HTTPS passkeys survive a backend replacement, sign in, and require a passw
     const device = await virtualAuthenticator(context, page);
     let dialog = await openPasskeys(page);
     await addPasskey(dialog, password, 'Laptop');
+    await choosePassword(dialog, 'passkey-password');
     assert.equal(await dialog.getByLabel('Confirm your password', { exact: true }).inputValue(), '');
     const persisted = JSON.parse(await readFile(f.env.AUTH_PATH, 'utf8'));
     assert.equal(persisted.passkeys.credentials.length, 1);
@@ -225,9 +249,11 @@ test('HTTPS passkeys survive a backend replacement, sign in, and require a passw
     await page.locator('.shell').waitFor();
     dialog = await openPasskeys(page);
     await dialog.getByRole('button', { name: 'Remove Laptop', exact: true }).click();
+    await choosePassword(dialog, 'passkey-remove-password');
     await dialog.getByLabel('Password to remove this passkey').fill(secret());
     await dialog.getByRole('button', { name: 'Remove passkey', exact: true }).click();
     await dialog.getByRole('alert').filter({ hasText: 'The current password is incorrect.' }).waitFor();
+    await choosePassword(dialog, 'passkey-remove-password');
     await dialog.getByLabel('Password to remove this passkey').fill(password);
     await dialog.getByRole('button', { name: 'Remove passkey', exact: true }).click();
     await dialog.getByText('No passkeys have been added.').waitFor();
@@ -250,6 +276,7 @@ test('HTTPS passkey enrollment checks each password, supports multiple authentic
         const device = await virtualAuthenticator(context, page);
         if (name === 'Phone') {
             await dialog.getByLabel('Passkey name', { exact: true }).fill(name);
+            await choosePassword(dialog, 'passkey-password');
             await dialog.getByLabel('Confirm your password', { exact: true }).fill(secret());
             await dialog.getByRole('button', { name: 'Add passkey', exact: true }).click();
             await dialog.getByRole('alert').filter({ hasText: 'The current password is incorrect.' }).waitFor();
@@ -261,10 +288,12 @@ test('HTTPS passkey enrollment checks each password, supports multiple authentic
     await dialog.getByText('You can register up to three passkeys.', { exact: false }).waitFor();
     assert.equal(await dialog.getByRole('button', { name: 'Add passkey', exact: true }).count(), 0);
     await dialog.getByRole('button', { name: 'Remove Phone', exact: true }).click();
+    await choosePassword(dialog, 'passkey-remove-password');
     await dialog.getByLabel('Password to remove this passkey').fill(secret());
     await dialog.getByRole('button', { name: 'Remove passkey', exact: true }).click();
     await dialog.getByRole('alert').filter({ hasText: 'The current password is incorrect.' }).waitFor();
     await dialog.getByText('3 of 3 passkeys registered').waitFor();
+    await choosePassword(dialog, 'passkey-remove-password');
     await dialog.getByLabel('Password to remove this passkey').fill(password);
     await dialog.getByRole('button', { name: 'Remove passkey', exact: true }).click();
     await dialog.getByText('2 of 3 passkeys registered').waitFor();
@@ -279,6 +308,7 @@ test('HTTPS browsers distinguish missing passkey configuration from unsupported 
     await dialog.getByRole('button', { name: 'Auth', exact: true }).click();
     await page.evaluate(() => { window.PublicKeyCredential = undefined; });
     await dialog.getByRole('button', { name: 'Auth', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Passkeys', exact: true }).click();
     await dialog.getByText('This browser does not support passkeys.', { exact: false }).waitFor();
 });
 
@@ -320,6 +350,7 @@ test('passkey sign-in explains an incompatible HTTPS origin and works at the con
     await addPasskey(dialog, password, 'Laptop');
     await dialog.getByRole('button', { name: 'Close', exact: true }).click();
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     const alternate = new URL(origin);
     alternate.hostname = '127.0.0.1';
     await page.goto(alternate.origin);
